@@ -2,6 +2,7 @@ server {
     listen 80;
     server_name _;  # Accept any domain name
 
+    # ── Internal: Bot detection check ─────────────────────────────────────
     location = /__bw_check {
         internal;
         proxy_pass ${BOTWALL_URL}/bw/check;
@@ -15,31 +16,53 @@ server {
         proxy_set_header X-JA3 $http_x_ja3;
     }
 
+    # ── SinkHole internal endpoints (SDK, beacons, gate) ──────────────────
     location ~ ^/(bw/|api/v1/analytics-ping|cdn-ping/perf|event/flow) {
         proxy_pass ${BOTWALL_URL};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
 
+    # ── Main: All traffic goes through bot detection ──────────────────────
     location / {
         auth_request /__bw_check;
         auth_request_set $bw_decision $upstream_http_x_botwall_decision;
         
+        # Gate: first-time visitor needs JS verification
         error_page 401 = @botwall_gate;
-        error_page 403 = @botwall_decoy;
 
-        # The target website to protect (e.g. https://my-actual-website.com)
-        # This will be substituted by Nginx's Docker entrypoint via env variable
+        # Decoy: bot detected → serve POISONED content at the SAME URL
+        # The bot sees the same URL it requested, but gets fake content
+        error_page 403 = @botwall_poison;
+
+        # Clean traffic → forward to the real website
         proxy_pass ${UPSTREAM_URL};
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
 
+    # ── Gate: JS verification page ────────────────────────────────────────
     location @botwall_gate {
         return 302 /bw/gate/challenge?path=$request_uri;
     }
 
-    location @botwall_decoy {
-        return 302 /bw/decoy/0;
+    # ── Poison: Serve poisoned content at the SAME URL (no redirect!) ─────
+    # Bots see "/products" in their URL bar, but get poisoned content.
+    # This makes it undetectable — the bot thinks it's scraping real pages.
+    location @botwall_poison {
+        proxy_pass ${BOTWALL_URL}/bw/poison?original_path=$request_uri;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header User-Agent $http_user_agent;
+        proxy_set_header Cookie $http_cookie;
+    }
+
+    # ── Legacy decoy endpoint (direct access) ────────────────────────────
+    location ~ ^/content/archive/ {
+        proxy_pass ${BOTWALL_URL};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Cookie $http_cookie;
     }
 }

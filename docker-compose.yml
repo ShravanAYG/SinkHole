@@ -1,46 +1,54 @@
-version: '3.8'
+# ─────────────────────────────────────────────────────────────────────────────
+# SinkHole — Use with ANY website
+#
+# Just change UPSTREAM_URL to your website and run:
+#   docker compose up -d --build
+#
+# Examples:
+#   UPSTREAM_URL=http://my-node-app:3000     (Node.js)
+#   UPSTREAM_URL=http://my-php-app:80        (PHP / Apache)
+#   UPSTREAM_URL=http://my-nextjs-app:3000   (Next.js)
+#   UPSTREAM_URL=https://my-website.com      (External URL)
+# ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  # The Bouncer: Intercepts all traffic before it hits your app
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "8080:80"    # Expose the site on typical port 80
-    volumes:
-      # Use Nginx templates to inject environment variables
-      - ./deploy/docker-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
-    environment:
-      # Change this to whatever website you want to protect
-      - UPSTREAM_URL=http://origin_app:80
-      - BOTWALL_URL=http://botwall:4000
-    depends_on:
-      - botwall
-    restart: unless-stopped
-    networks:
-      - sinkhole_net
-
-  # The Brain: Our SinkHole advanced behavioral Engine
-  botwall:
+  sinkhole:
     build: .
+    ports:
+      - "80:80"
     environment:
-      # !! CHANGE THESE IN PRODUCTION !!
+      # ┌──────────────────────────────────────────────────────────────────┐
+      # │  UPSTREAM_URL — The website you want to protect                 │
+      # │  Point this at your web app's Docker container or external URL  │
+      # └──────────────────────────────────────────────────────────────────┘
+      - UPSTREAM_URL=http://host.docker.internal:3000
+
+      # ── Security keys (CHANGE IN PRODUCTION!) ──
       - BOTWALL_SECRET_KEY=change-me-to-a-strong-random-key
       - BOTWALL_TELEMETRY_SECRET=change-me-key-for-cluster-sync
-      # Set to 1 and add BOTWALL_REDIS_URL='redis://redis:6379/0' when scaling
-      - BOTWALL_REDIS_ENABLED=0 
+
+      # ── Optional: Redis for multi-instance deployments ──
+      # - BOTWALL_REDIS_ENABLED=1
+      # - BOTWALL_REDIS_URL=redis://redis:6379/0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     restart: unless-stopped
-    networks:
-      - sinkhole_net
 
-  # The Victim App: Any Web App (Node, PHP, standard website)
-  # For demo purposes, we will use httpbin as our dummy protected app
-  origin_app:
-    image: kennethreitz/httpbin
-    expose:
-      - "80"
-    networks:
-      - sinkhole_net
-
-networks:
-  sinkhole_net:
-    driver: bridge
+# ─────────────────────────────────────────────────────────────────────────────
+# To protect a Docker-based website running on the same network:
+#
+#   services:
+#     sinkhole:
+#       ...
+#       environment:
+#         - UPSTREAM_URL=http://my-app:3000
+#
+#     my-app:
+#       image: my-website:latest
+#       expose:
+#         - "3000"
+# ─────────────────────────────────────────────────────────────────────────────

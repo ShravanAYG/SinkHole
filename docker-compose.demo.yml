@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SinkHole — Demo Mode
+#
+# Spins up SinkHole + a dummy website (httpbin) to test bot detection.
+#
+# Run:
+#   docker compose -f docker-compose.demo.yml up -d --build
+#
+# Then visit http://localhost — SinkHole is protecting the demo site!
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  sinkhole:
+    build: .
+    ports:
+      - "80:80"
+    environment:
+      - UPSTREAM_URL=http://demo_app:80
+      - BOTWALL_SECRET_KEY=demo-secret-key
+      - BOTWALL_TELEMETRY_SECRET=demo-telemetry-key
+    depends_on:
+      - demo_app
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  # Demo website — replace this with YOUR app in production
+  demo_app:
+    image: kennethreitz/httpbin
+    expose:
+      - "80"

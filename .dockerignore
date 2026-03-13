@@ -10,4 +10,21 @@ venv/
 tests/
 scripts/
 .git/
+.github/
 .gitignore
+.dockerignore
+
+# Documentation (not needed in image)
+*.md
+!botwall.toml
+
+# Development files
+Dockerfile.standalone
+docker-compose*.yml
+deploy/rendered/
+deploy/systemd/
+deploy/nginx.conf
+deploy/nginx-live-demo.conf
+deploy/Caddyfile
+deploy/apache*
+pyproject.toml

@@ -1,66 +1,112 @@
 # SinkHole Docker Quickstart
 
-SinkHole is built to drop in front of **any** web application (Node.js, PHP, Ruby, Next.js, etc.) without requiring any application code changes. 
-
-We provide a production-ready `docker-compose` environment that stands up Nginx as the edge proxy alongside the SinkHole Engine.
+SinkHole ships as a **single Docker image** that drops in front of **any** website — Node.js, PHP, Ruby, Next.js, Django, WordPress, anything. No code changes needed.
 
 ## How it works
 
-1. All web traffic hits Nginx.
-2. Nginx asks SinkHole: *"Is this a human?"* (`/__bw_check`)
-3. SinkHole calculates behavior, Proof-of-Work, and trap data.
-4. Nginx either routes traffic to your `origin_app`, or drops it into the Decoy Labyrinth.
+```
+Your Users → SinkHole (Docker) → Your Website
+```
+
+1. All traffic hits SinkHole's built-in Nginx.
+2. Nginx asks the Botwall engine: *"Is this a human?"*
+3. Bots get trapped in a decoy labyrinth. Humans pass through to your site.
+
+---
 
 ## 1. Quick Start (Demo Mode)
 
-We have bundled a dummy website (`httpbin`) so you can test SinkHole instantly:
+Test SinkHole instantly with a bundled dummy website:
 
 ```bash
-docker-compose up -d --build
+docker compose -f docker-compose.demo.yml up -d --build
 ```
-* **Done.** Wait 15 seconds, and go to `http://localhost`. SinkHole is protecting it! 
-* Try running a basic scraper: `curl http://localhost` — you will get routed immediately into the decoy maze.
 
-## 2. Bring Your Own Web App
+Visit `http://localhost` — SinkHole is protecting it!
 
-When you want to protect your actual application, modify the `docker-compose.yml` to point to your existing Docker container.
+---
 
-### Edit `docker-compose.yml`:
-Swap out the `origin_app` block with your application:
+## 2. Protect ANY Website
+
+### Option A: Your website runs on the same machine
+
+```bash
+# Set UPSTREAM_URL to your app and run
+UPSTREAM_URL=http://host.docker.internal:3000 docker compose up -d --build
+```
+
+### Option B: Your website is a Docker container
+
+Edit `docker-compose.yml`:
 
 ```yaml
-  origin_app:
-    image: my-node-website:latest  # <--- YOUR IMAGE HERE
+services:
+  sinkhole:
+    build: .
+    ports:
+      - "80:80"
+    environment:
+      - UPSTREAM_URL=http://my-app:3000  # ← your container name + port
+      - BOTWALL_SECRET_KEY=your-secret-here
+
+  my-app:
+    image: my-website:latest
     expose:
-      - "3000"                    # <--- YOUR APP'S INTERNAL PORT
+      - "3000"
 ```
 
-### Edit `deploy/docker-nginx.conf`:
-Update the proxy pass to match your container's port:
-```nginx
-    # Pass clean traffic directly to the Origin App (Target Service)
-    proxy_pass http://origin_app:3000;  # <--- CHANGE TO YOUR PORT
+### Option C: Your website is an external URL
+
+```yaml
+environment:
+  - UPSTREAM_URL=https://my-production-website.com
 ```
 
-Rebuild:
+### Option D: Pre-built image from ECR
+
 ```bash
-docker-compose up -d --build
+docker run -d -p 80:80 \
+  -e UPSTREAM_URL=http://my-website:3000 \
+  -e BOTWALL_SECRET_KEY=$(openssl rand -hex 32) \
+  123456789.dkr.ecr.ap-south-1.amazonaws.com/sinkhole:latest
 ```
 
-## 3. The Final Step: Add the JS SDK
+---
 
-To get advanced Phase 2 Behavioral Analytics (mouse tracking, entropy analysis, scroll dynamics), inject our SDK into the `<head>` of your website's HTML template:
+## 3. Add the JS SDK (Optional, Recommended)
+
+For advanced behavioral analytics (mouse tracking, scroll dynamics, entropy analysis), add this to your website's `<head>`:
 
 ```html
 <script src="/bw/sdk.js" defer></script>
 ```
 
-When users hit your actual site, SinkHole will ingest the beacons in the background silently.
+SinkHole will ingest the behavioral beacons silently in the background.
 
-## 4. Going to Production
+---
 
-Before putting this exposed on the internet, secure your `docker-compose.yml`:
-1. Change `BOTWALL_SECRET_KEY` and `BOTWALL_TELEMETRY_SECRET` to random, hyper-secure hashes.
-2. If running across multiple nodes, scale it up via Redis:
-   * Set `BOTWALL_REDIS_ENABLED=1`
-   * Provide a Redis instance: `BOTWALL_REDIS_URL='redis://your-redis-server:6379/0'`
+## 4. Deploy to AWS
+
+See [AWS_DOCKER_DEPLOY.md](AWS_DOCKER_DEPLOY.md) for the full guide:
+- Push to ECR
+- Run on ECS Fargate
+- Set up ALB + HTTPS
+- CI/CD via GitHub Actions
+
+---
+
+## 5. Production Security
+
+Before exposing to the internet:
+
+```bash
+# Generate strong keys
+export BOTWALL_SECRET_KEY=$(openssl rand -hex 32)
+export BOTWALL_TELEMETRY_SECRET=$(openssl rand -hex 32)
+```
+
+For multi-instance deployments, enable Redis:
+```yaml
+- BOTWALL_REDIS_ENABLED=1
+- BOTWALL_REDIS_URL=redis://your-redis:6379/0
+```

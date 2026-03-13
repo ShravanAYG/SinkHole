@@ -506,9 +506,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         num_decoy_nodes=cfg.decoy_max_nodes,
     )
     
-    # Start scheduler in background (non-blocking)
-    import asyncio
-    asyncio.create_task(regeneration_scheduler.start())
+    # Start scheduler when the app is ready (event loop is running)
+    @app.on_event("startup")
+    async def _start_regeneration():
+        import asyncio
+        asyncio.create_task(regeneration_scheduler.start())
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -1160,6 +1162,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ))
         
         response.headers["x-botwall-decision"] = "decoy"
+        response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/bw/poison")
+    async def bw_poison(request: Request, original_path: str = "/") -> HTMLResponse:
+        """
+        Transparent content poisoning endpoint.
+        
+        Called internally by Nginx when a bot is detected. The bot sees the
+        SAME URL it requested (e.g. /products, /about) but gets poisoned
+        content instead of the real page. This is undetectable by bots.
+        
+        The original_path query param tells us what URL the bot was trying
+        to access, so we can generate contextually appropriate fake content.
+        """
+        import logging
+        logger = logging.getLogger("sinkhole.poison")
+        
+        session_id = _get_session_id(request, cfg)
+        client_ip = _client_ip(request)
+        
+        # Use the original path to seed deterministic poisoned content
+        # so the same URL always returns the same fake page (caching-friendly)
+        path_hash = hash(original_path) % cfg.decoy_max_nodes
+        
+        logger.warning(
+            f"POISON_SERVE ip={client_ip} original_path={original_path} "
+            f"node={path_hash} sid={session_id[:8]}"
+        )
+        
+        # Try pre-generated extrapolated content first (zero latency)
+        node_data = get_decoy_node(path_hash)
+        
+        if node_data is not None:
+            response = HTMLResponse(render_extrapolated_decoy_page(
+                node_data=node_data,
+                session_id=session_id,
+                show_markers=False,  # No markers — bot must not know it's fake
+            ))
+        else:
+            # Fallback: generate on-demand with path-seeded content
+            node = build_embeddings_node(
+                session_id,
+                path_hash,
+                max_nodes=cfg.decoy_max_nodes,
+                min_links=cfg.decoy_min_links,
+                max_links=cfg.decoy_max_links,
+                coherence_level=0.95,      # High coherence — must look real
+                falsehood_density=0.5,     # Half the facts are wrong
+                human_markers=False,       # No markers for bots
+            )
+            response = HTMLResponse(render_embeddings_decoy_page(
+                node=node, session_id=session_id
+            ))
+        
+        # Return 200 OK — bot must think it got real content
+        response.status_code = 200
+        # Do NOT set x-botwall headers — bot could detect them
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
         _attach_cookie(response, cfg, session_id)
         return response

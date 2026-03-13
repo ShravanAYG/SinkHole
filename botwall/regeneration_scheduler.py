@@ -263,10 +263,11 @@ class RegenerationScheduler:
     
     def _generate_links(self, node_id: int) -> list[int]:
         """Generate deterministic links for a node."""
-        rng = random.Random(
+        seed = int(
             hashlib.sha256(f"links:{node_id}:v{self._current_store.version}".encode()).hexdigest()[:8],
             16,
         )
+        rng = random.Random(seed)
         
         num_links = rng.randint(3, 6)
         links = []
