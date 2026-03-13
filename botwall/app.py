@@ -1161,8 +1161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 show_markers=True,
             ))
         
-        response.headers["x-botwall-decision"] = "decoy"
-        response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
+        # No giveaway headers — content must look identical to real pages
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1218,10 +1217,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 node=node, session_id=session_id
             ))
         
-        # Return 200 OK — bot must think it got real content
+        # Return 200 OK — absolutely no headers that reveal this is fake
         response.status_code = 200
-        # Do NOT set x-botwall headers — bot could detect them
-        response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
         _attach_cookie(response, cfg, session_id)
         return response
 
