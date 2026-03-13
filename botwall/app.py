@@ -948,6 +948,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def bw_check(request: Request) -> JSONResponse:
         fallback = request.query_params.get("path", "/")
         target_path = _canonical_target_path(request, fallback)
+
+        # FAST PATH: If already heading to decoy/restricted pages, allow it unconditionally
+        # to prevent infinite redirect loops in Nginx.
+        if target_path.startswith("/content/archive") or target_path.startswith("/content/restricted"):
+            return JSONResponse({"decision": "allow", "score": -100.0, "reasons": ["decoy_passthrough"]})
+
         pre_gate_reasons = _explicit_scraper_reasons(request)
         if pre_gate_reasons:
             session_id = _get_session_id(request, cfg)
