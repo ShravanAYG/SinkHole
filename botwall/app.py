@@ -34,6 +34,7 @@ from .html import (
     render_enhanced_telemetry_page,
     sdk_script,
 )
+from .js_verify_page import render_js_verify_page
 from .models import (
     BeaconEvent,
     CheckResponse,
@@ -579,7 +580,88 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=302
             )
         
-        # HUMAN → issue gate cookie and redirect directly (NO CAPTCHA)
+        # HUMAN → serve JS verification page (runs browser checks before issuing gate cookie)
+        logger.warning(f"GATE_JS_VERIFY ip={client_ip} path={path}")
+        page = render_js_verify_page(session_id=session_id, path=path)
+        response = HTMLResponse(page)
+        response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True, samesite="lax", path="/")
+        return response
+
+    @app.post("/bw/js-verify")
+    async def bw_js_verify(request: Request) -> JSONResponse:
+        """
+        Verify client-side JS browser checks.
+        If checks pass → issue gate cookie and allow.
+        If checks fail → redirect to decoy.
+        """
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+        
+        session_id = data.get("session_id")
+        checks = data.get("checks", {})
+        
+        if not session_id:
+            return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
+        
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        session = store.store.load_session(session_id, ip_hash)
+        
+        passed = int(checks.get("passed", 0))
+        failed = int(checks.get("failed", 0))
+        details = checks.get("details", [])
+        
+        # Log the JS verification attempt
+        import logging
+        logger = logging.getLogger("sinkhole.gate")
+        logger.warning(f"JS_VERIFY ip={client_ip} sid={session_id[:8]} passed={passed} failed={failed} details={details}")
+        
+        # Check for bot indicators in JS results
+        is_bot = False
+        bot_reasons = []
+        
+        # If webdriver detected, it's a bot
+        if "webdriver_detected" in details:
+            is_bot = True
+            bot_reasons.append("js:webdriver_detected")
+        
+        # If too many checks failed, likely a headless browser
+        if failed >= 3:
+            is_bot = True
+            bot_reasons.append(f"js:too_many_checks_failed:{failed}")
+        
+        # If no plugins and no canvas, likely automation
+        if "no_plugins" in details and "canvas_fail" in details:
+            is_bot = True
+            bot_reasons.append("js:missing_browser_features")
+        
+        # Must have passed at least 5 checks to be considered human
+        if passed < 5:
+            is_bot = True
+            bot_reasons.append(f"js:insufficient_passed_checks:{passed}")
+        
+        if is_bot:
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).extend(bot_reasons)
+            session["js_verification_failed"] = True
+            session["js_check_details"] = details
+            _record_decision(session, "decoy", bot_reasons)
+            store.store.save_session(session)
+            
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            logger.warning(f"JS_VERIFY_BLOCK ip={client_ip} reasons={bot_reasons}")
+            return JSONResponse({
+                "ok": False,
+                "decision": "decoy",
+                "error": "Browser verification failed",
+                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type=bot&reason=js_verification_failed",
+            }, status_code=403)
+        
+        # JS verification passed → issue gate cookie
         gate_token = issue_gate_token(
             secret=cfg.secret_key,
             session_id=session_id,
@@ -589,25 +671,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ttl_seconds=cfg.gate_ttl_seconds,
         )
         
-        session = store.store.load_session(session_id, ip_hash)
         session["gate_passed_at"] = now_ts()
         session["gate_env_score"] = 0
         session["gate_failures"] = 0
-        _record_decision(session, "allow", ["simple_rules:human"])
+        session["js_verification_passed"] = True
+        session["js_check_details"] = details
+        _record_decision(session, "allow", ["js_verification:passed"])
         store.store.save_session(session)
         
-        logger.warning(f"GATE_ALLOW ip={client_ip} redirect={path}")
-        response = RedirectResponse(url=path, status_code=302)
-        response.set_cookie(
-            key=cfg.gate_cookie,
-            value=gate_token,
-            httponly=True,
-            samesite="lax",
-            max_age=cfg.gate_ttl_seconds,
-            path="/",
-        )
-        response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True, samesite="lax", path="/")
-        return response
+        logger.warning(f"JS_VERIFY_ALLOW ip={client_ip}")
+        
+        return JSONResponse({
+            "ok": True,
+            "decision": "allow",
+            "next_path": data.get("return_path", "/"),
+        })
 
     @app.post("/bw/gate/verify")
     async def bw_gate_verify(request: Request) -> Response:
