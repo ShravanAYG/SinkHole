@@ -2521,8 +2521,10 @@ def render_telemetry_page(data: dict[str, Any]) -> str:
         traversal_ok = int(s.get("traversal_valid", 0))
         traversal_bad = int(s.get("traversal_invalid", 0))
         history = s.get("decision_history", [])
-        cls = "ok" if latest == "allow" else "warn" if latest in {"observe", "challenge"} else "risk"
-        
+        latest = "-"
+        if history:
+            latest = str(history[-1].get("decision", "-"))
+        cls = "ok" if latest == "allow" else "warn" if latest in {"observe", "challenge"} else "risk"        
         client_ip = html.escape(str(s.get("client_ip", "-")))
         path = html.escape(str(s.get("last_path", "-")))
         
