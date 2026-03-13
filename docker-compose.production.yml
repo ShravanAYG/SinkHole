@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SinkHole + Your Website — Run Both on the Same Server
+#
+# Usage:
+#   1. Replace "your-website-image:latest" with YOUR Docker image
+#   2. Set the correct port your app listens on
+#   3. Run: docker compose -f docker-compose.production.yml up -d --build
+#
+# This runs both SinkHole and your website on a single AWS server.
+# SinkHole intercepts all traffic on port 80, protects your website.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── SinkHole: Bot Detection + Content Poisoning Gateway ─────────────────
+  sinkhole:
+    build: .
+    ports:
+      - "80:80"           # All traffic enters here
+    environment:
+      - UPSTREAM_URL=http://website:3000   # Points to your website container below
+      - BOTWALL_SECRET_KEY=${BOTWALL_SECRET_KEY:-change-me}
+      - BOTWALL_TELEMETRY_SECRET=${BOTWALL_TELEMETRY_SECRET:-change-me}
+    depends_on:
+      - website
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Your Website ───────────────────────────────────────────────────────
+  # Replace this with YOUR application
+  website:
+    image: your-website-image:latest       # ← YOUR IMAGE HERE
+    # build: /path/to/your/website         # ← Or build from source
+    expose:
+      - "3000"                             # ← YOUR APP'S PORT (not exposed to internet)
+    # environment:
+    #   - DATABASE_URL=postgres://...      # ← Your app's env vars
+    restart: unless-stopped
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Traffic flow:
+#
+#   Internet:80 → SinkHole (Nginx + Botwall)
+#                   ├── Human? → website:3000 (your real app)
+#                   └── Bot?   → Poisoned content (same URL, fake data)
+#
+# Your website is NOT exposed to the internet directly.
+# Only SinkHole's port 80 is public.
+# ─────────────────────────────────────────────────────────────────────────────
