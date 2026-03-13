@@ -136,7 +136,6 @@ def create_gateway() -> FastAPI:
                 follow_redirects=False,
                 timeout=10.0,
             )
-            decision = check_resp.headers.get("x-botwall-decision", "observe")
 
             if decision == "challenge":
                 encoded = urllib.parse.quote(target, safe="/?=&")
@@ -150,14 +149,13 @@ def create_gateway() -> FastAPI:
                     sid = str(check_resp.json().get("session_id", "")).strip()
                 except Exception:
                     sid = ""
-                loc = f"/bw/decoy/0?sid={sid}" if sid else "/bw/decoy/0"
+                loc = f"/content/archive/0?sid={sid}" if sid else "/content/archive/0"
                 response = RedirectResponse(url=loc, status_code=302)
                 _copy_set_cookie_headers(check_resp, response)
                 return response
 
             origin_resp = await _proxy_request(client, request, origin_url)
             _copy_set_cookie_headers(check_resp, origin_resp)
-            origin_resp.headers["x-botwall-decision"] = decision
             score = check_resp.headers.get("x-botwall-score")
             reasons = check_resp.headers.get("x-botwall-reasons")
             if score:

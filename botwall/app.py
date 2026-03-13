@@ -13,6 +13,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
+from .embeddings_content import generate_fake_decoy_content, FakeContentConfig
+from .embeddings_renderer import render_embeddings_decoy_page
+from .enhanced_decoy import build_embeddings_node, build_hybrid_node, EnhancedDecoyNode
+from .extrapolation_engine import extrapolate_poisoned_content, ExtrapolationConfig
+from .extrapolation_renderer import render_extrapolated_decoy_page, render_regeneration_status_page
+from .regeneration_scheduler import get_scheduler, get_decoy_node, get_scheduler_metrics
 from .html import (
     render_about_page,
     render_behavioral_challenge_page,
@@ -249,11 +255,9 @@ def _redirect_explicit_scraper_to_decoy(
     # Use node_id based on session hash for consistency
     node_id_hash = hash(session_id) % settings.decoy_max_nodes
     response = RedirectResponse(
-        url=f"/bw/decoy/{node_id_hash}?sid={session_id}&caught=1", 
+        url=f"/content/archive/{node_id_hash}?ref={session_id[:8]}", 
         status_code=302
     )
-    response.headers["x-botwall-decision"] = "decoy"
-    response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
     _attach_cookie(response, settings, session_id)
     return response
 
@@ -495,6 +499,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     cfg = settings or load_settings()
     store = init_store(cfg.redis_enabled, cfg.redis_url)
     peer_secrets = parse_peer_secrets(cfg.peer_secrets_raw or os.getenv("BOTWALL_PEER_SECRETS"))
+    
+    # Initialize background regeneration scheduler (zero-latency decoy content refresh)
+    regeneration_scheduler = get_scheduler(
+        interval_seconds=180.0,  # 3 minutes
+        num_decoy_nodes=cfg.decoy_max_nodes,
+    )
+    
+    # Start scheduler in background (non-blocking)
+    import asyncio
+    asyncio.create_task(regeneration_scheduler.start())
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -587,9 +601,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             store.store.save_session(session)
             
             node_id = hash(session_id) % cfg.decoy_max_nodes
-            logger.warning(f"GATE_BLOCK ip={client_ip} reason={reason} redirect=/bw/decoy/{node_id}")
+            logger.warning(f"GATE_BLOCK ip={client_ip} reason={reason} redirect=/content/archive/{node_id}")
             return RedirectResponse(
-                url=f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type={client_type}&reason={reason}",
+                url=f"/content/archive/{node_id}?ref={session_id[:8]}",
                 status_code=302
             )
         
@@ -650,7 +664,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "ok": False,
                 "decision": "decoy",
                 "error": error_msg,
-                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type=bot",
+                "next_path": f"/content/archive/{node_id}?ref={session_id[:8]}",
             }, status_code=403)
 
         # ── Step 1: Validate PoW solution ──────────────────────────────────
@@ -795,7 +809,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             node_id = hash(session_id) % cfg.decoy_max_nodes
             return JSONResponse({
                 "decision": "decoy",
-                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1",
+                "next_path": f"/content/archive/{node_id}?ref={session_id[:8]}",
                 "reasons": env_reasons,
             }, status_code=403)
         
@@ -880,7 +894,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({
                 "decision": "decoy",
                 "score": total_score,
-                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1",
+                "next_path": f"/content/archive/{node_id}?ref={session_id[:8]}",
                 "reasons": all_reasons,
                 "risks": all_risks,
             }, status_code=403)
@@ -967,9 +981,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 reasons=pre_gate_reasons,
             )
             response = JSONResponse(payload.model_dump(mode="json"))
-            response.headers["x-botwall-decision"] = "decoy"
             response.headers["x-botwall-score"] = f"{float(session.get('score', 0.0)):.2f}"
-            response.headers["x-botwall-reasons"] = ",".join(pre_gate_reasons[-6:])
             _attach_cookie(response, cfg, session_id)
             return response
         require_traversal = target_path.startswith("/content/")
@@ -987,9 +999,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             reasons=reasons,
         )
         response = JSONResponse(payload.model_dump(mode="json"))
-        response.headers["x-botwall-decision"] = decision
         response.headers["x-botwall-score"] = f"{float(session.get('score', 0.0)):.2f}"
-        response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1015,7 +1025,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         page = render_challenge_page(session_id=session_id, token=token, nonce=nonce, target_path=target_path)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = "challenge"
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1072,7 +1081,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             needs_challenge=(decision == "challenge"),
         )
         response = JSONResponse(result.model_dump(mode="json"), status_code=202)
-        response.headers["x-botwall-decision"] = decision
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1117,23 +1125,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _ = alias
         return await _ingest_beacon(request, payload)
 
-    @app.get("/bw/decoy/{node_id}")
+    @app.get("/content/archive/{node_id}")
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
-        node = build_node(
-            session_id,
-            node_id % cfg.decoy_max_nodes,
-            max_nodes=cfg.decoy_max_nodes,
-            min_links=cfg.decoy_min_links,
-            max_links=cfg.decoy_max_links,
-        )
-        response = HTMLResponse(render_decoy_page(node=node, session_id=session_id))
+        
+        # Use zero-latency regeneration scheduler for extrapolated decoy content
+        # This content is derived from real page content but falsified with:
+        # - Entity substitutions (real names → similar fake names)
+        # - Date shifting (±2 years)
+        # - Number perturbation (±25%)
+        # - Quote misattribution
+        # - Citation fabrication
+        node_data = get_decoy_node(node_id % cfg.decoy_max_nodes)
+        
+        if node_data is None:
+            # Fallback: generate on-demand if scheduler hasn't populated yet
+            node = build_embeddings_node(
+                session_id,
+                node_id % cfg.decoy_max_nodes,
+                max_nodes=cfg.decoy_max_nodes,
+                min_links=cfg.decoy_min_links,
+                max_links=cfg.decoy_max_links,
+                coherence_level=0.9,
+                falsehood_density=0.4,
+                human_markers=True,
+            )
+            response = HTMLResponse(render_embeddings_decoy_page(node=node, session_id=session_id))
+        else:
+            # Use pre-generated extrapolated content (zero latency)
+            response = HTMLResponse(render_extrapolated_decoy_page(
+                node_data=node_data,
+                session_id=session_id,
+                show_markers=True,
+            ))
+        
         response.headers["x-botwall-decision"] = "decoy"
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
         _attach_cookie(response, cfg, session_id)
         return response
 
-    @app.get("/bw/bot-caught")
+    @app.get("/bw/regeneration/status")
+    async def bw_regeneration_status(request: Request) -> HTMLResponse:
+        """Status page for decoy content regeneration system."""
+        session_id = _get_session_id(request, cfg)
+        metrics = get_scheduler_metrics()
+        response = HTMLResponse(render_regeneration_status_page(metrics))
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/content/restricted")
     async def bw_bot_caught(request: Request) -> HTMLResponse:
         """Bot/scraper detection page - shows 'YOU LOWDE BOT' message."""
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
@@ -1150,7 +1190,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             user_agent=user_agent,
             reasons=reasons[-6:] if reasons else None
         ))
-        response.headers["x-botwall-decision"] = "bot_caught"
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
         _attach_cookie(response, cfg, session_id)
         return response
@@ -1358,7 +1397,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             require_traversal=False,
         )
         if decision == "decoy":
-            response = RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+            response = RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
             _attach_cookie(response, cfg, session_id)
             return response
         if decision == "challenge":
@@ -1369,8 +1408,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         links = _make_links(cfg, session_id, ip_hash, page_id=0)
         page = render_origin_page(session_id=session_id, page_id=0, links=links)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
-        response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1397,7 +1434,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
         if decision == "decoy":
-            response = RedirectResponse(url=f"/bw/decoy/{page_id % cfg.decoy_max_nodes}?sid={session_id}", status_code=302)
+            response = RedirectResponse(url=f"/content/archive/{page_id % cfg.decoy_max_nodes}?ref={session_id[:8]}", status_code=302)
             _attach_cookie(response, cfg, session_id)
             return response
         if decision == "challenge":
@@ -1409,8 +1446,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         links = _make_links(cfg, session_id, ip_hash, page_id=page_id)
         page = render_origin_page(session_id=session_id, page_id=page_id, links=links)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
-        response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1433,11 +1468,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request=request, settings=cfg, store=store, target_path="/about", require_traversal=False,
         )
         if decision == "decoy":
-            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
 
         page = render_about_page(session_id=session_id)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1458,11 +1492,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request=request, settings=cfg, store=store, target_path="/contact", require_traversal=False,
         )
         if decision == "decoy":
-            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
 
         page = render_contact_page(session_id=session_id)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1483,11 +1516,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request=request, settings=cfg, store=store, target_path="/products", require_traversal=False,
         )
         if decision == "decoy":
-            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
 
         page = render_products_page(session_id=session_id)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1508,11 +1540,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request=request, settings=cfg, store=store, target_path="/blog", require_traversal=False,
         )
         if decision == "decoy":
-            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
 
         page = render_blog_page(session_id=session_id)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1534,11 +1565,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request=request, settings=cfg, store=store, target_path=f"/blog/{post_id}", require_traversal=True,
         )
         if decision == "decoy":
-            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
 
         page = render_blog_post_page(session_id=session_id, post_id=post_id)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -1559,7 +1589,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request=request, settings=cfg, store=store, target_path="/search", require_traversal=False,
         )
         if decision == "decoy":
-            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
 
         # Simple search results
         results = []
@@ -1580,7 +1610,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         page = render_search_page(session_id=session_id, query=q, results=results)
         response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = decision
         _attach_cookie(response, cfg, session_id)
         return response
 

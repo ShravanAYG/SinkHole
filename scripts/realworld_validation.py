@@ -164,7 +164,6 @@ def run_validation(base_url: str) -> None:
 
     r1 = browser.get("/")
     assert_true(r1.status_code == 200, f"Expected 200 on browser hit after gate, got {r1.status_code}")
-    assert_true(r1.headers.get("x-botwall-decision") in {"observe", "allow"}, "Expected observe/allow after gate")
 
     r2 = browser.get("/content/1")
     assert_true(r2.status_code == 302, f"Expected challenge redirect, got {r2.status_code}")
@@ -189,7 +188,6 @@ def run_validation(base_url: str) -> None:
 
     after = browser.get("/")
     assert_true(after.status_code == 200, "Expected 200 after proof")
-    assert_true(after.headers.get("x-botwall-decision") in {"allow", "observe"}, "Expected allow/observe after proof")
 
     headless = httpx.Client(
         base_url=base_url,
@@ -205,7 +203,7 @@ def run_validation(base_url: str) -> None:
         h = headless.get("/")
         assert_true(h.status_code == 302, f"Expected headless redirect, got {h.status_code}")
         loc = h.headers.get("location", "")
-        if loc.startswith("/bw/decoy/"):
+        if loc.startswith("/content/archive/"):
             decoy_seen = True
             break
         assert_true(loc.startswith("/bw/challenge"), f"Expected challenge/decoy redirect, got {loc}")

@@ -194,7 +194,6 @@ def test_browser_flow_gate_challenge_proof_and_telemetry(live_base_url: str) -> 
 
     home = client.get("/")
     assert home.status_code == 200
-    assert home.headers.get("x-botwall-decision") in {"observe", "allow"}
 
     gate_check = client.get("/bw/gate/check")
     assert gate_check.status_code == 200
@@ -302,7 +301,7 @@ def test_explicit_scrapers_are_sent_to_decoy_before_gate(live_base_url: str) -> 
         )
         response = client.get("/")
         assert response.status_code == 302
-        assert "/bw/decoy/" in response.headers.get("location", "")
+        assert "/content/archive/" in response.headers.get("location", "")
 
 
 def test_headless_decoy_and_recovery(live_base_url: str) -> None:
@@ -315,7 +314,7 @@ def test_headless_decoy_and_recovery(live_base_url: str) -> None:
 
     first = client.get("/")
     assert first.status_code == 302
-    assert first.headers.get("location", "").startswith("/bw/decoy/")
+    assert first.headers.get("location", "").startswith("/content/archive/")
 
     start = client.post("/bw/recovery/start", json={"reason": "false_positive"})
     assert start.status_code == 202

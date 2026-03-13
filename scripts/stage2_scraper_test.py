@@ -159,7 +159,6 @@ def run_profile(name: str, headers: dict[str, str], iterations: int, random_dela
         res = client.get(path)
         statuses[res.status_code] = statuses.get(res.status_code, 0) + 1
 
-        decision = res.headers.get("x-botwall-decision")
         if decision:
             decisions[decision] = decisions.get(decision, 0) + 1
 
@@ -174,7 +173,6 @@ def run_profile(name: str, headers: dict[str, str], iterations: int, random_dela
                     entropy=round(random.uniform(0.8, 1.8), 3),
                 )
                 follow = client.get(path)
-                d2 = follow.headers.get("x-botwall-decision")
                 statuses[follow.status_code] = statuses.get(follow.status_code, 0) + 1
                 if d2:
                     decisions[d2] = decisions.get(d2, 0) + 1
