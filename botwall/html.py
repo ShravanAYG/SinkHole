@@ -348,3 +348,124 @@ def render_dashboard(data: dict[str, Any]) -> str:
   <pre>{pretty}</pre>
 </body>
 </html>"""
+
+
+def render_gate_challenge_page(*, session_id: str, challenge: str, difficulty: int, target_path: str) -> str:
+    challenge_js = json.dumps(challenge)
+    difficulty_js = json.dumps(difficulty)
+    target_js = json.dumps(target_path)
+    
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <title>Verifying your browser...</title>
+  <style>
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; max-width: 720px; }}
+    .card {{ border: 1px solid #ddd; border-radius: 10px; padding: 1rem; text-align: center; }}
+    .spinner {{ display: inline-block; width: 30px; height: 30px; border: 3px solid rgba(0,0,0,.3); border-radius: 50%; border-top-color: #000; animation: spin 1s ease-in-out infinite; }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Checking your browser before accessing the site.</h2>
+    <p>This process is automatic. Your browser will redirect to your requested content shortly.</p>
+    <div class="spinner"></div>
+    <p id="status" aria-live="polite">Running security check...</p>
+  </div>
+  
+  <script>
+    const challenge = {challenge_js};
+    const difficulty = {difficulty_js};
+    const targetPath = {target_js};
+    
+    // Concurrently gather env report while web worker crunches PoW
+    const getEnvReport = () => {{
+      const getRenderer = () => {{
+        try {{
+          const c = document.createElement("canvas");
+          const gl = c.getContext("webgl");
+          if (!gl) return "none";
+          const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+          return dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : "unknown";
+        }} catch {{ return "error"; }}
+      }};
+      
+      return {{
+        webdriver: navigator.webdriver === true,
+        chrome_obj: typeof window.chrome !== "undefined",
+        plugins_count: navigator.plugins.length,
+        languages: navigator.languages ? Array.from(navigator.languages) : [],
+        viewport: [window.innerWidth, window.innerHeight],
+        notification_api: (() => {{
+          try {{ return typeof Notification !== "undefined"; }} catch {{ return false; }}
+        }})(),
+        perf_memory: "memory" in performance,
+        touch_support: "ontouchstart" in window,
+        device_pixel_ratio: window.devicePixelRatio || 1,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        renderer: getRenderer()
+      }};
+    }};
+
+    const workerSrc = `
+      self.onmessage = async (e) => {{
+        const {{ challenge, difficulty }} = e.data;
+        let nonce = 0;
+        const target = "0".repeat(difficulty);
+
+        while (true) {{
+          const input = challenge + nonce.toString(16);
+          const buf = new TextEncoder().encode(input);
+          const hashBuf = await crypto.subtle.digest("SHA-256", buf);
+          const hex = Array.from(new Uint8Array(hashBuf))
+            .map(b => b.toString(16).padStart(2, "0")).join("");
+            
+          if (hex.startsWith(target)) {{
+            self.postMessage({{ nonce: nonce.toString(16), hash: hex }});
+            return;
+          }}
+          nonce++;
+        }}
+      }};
+    `;
+
+    const blob = new Blob([workerSrc], {{type: "application/javascript"}});
+    const worker = new Worker(URL.createObjectURL(blob));
+
+    worker.onmessage = async (e) => {{
+      const {{ nonce }} = e.data;
+      const env_report = getEnvReport();
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = "Verifying result...";
+      
+      try {{
+        const res = await fetch("/bw/gate/verify", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json"}},
+          body: JSON.stringify({{ challenge, nonce, env_report }})
+        }});
+        
+        if (res.ok) {{
+          const data = await res.json();
+          if (data.ok) {{
+            statusEl.textContent = "Redirecting...";
+            let next = new URLSearchParams(window.location.search).get("path") || targetPath;
+            if (!next.startsWith("/")) next = "/"; // safety
+            window.location.assign(next);
+            return;
+          }}
+        }}
+        statusEl.textContent = "Verification failed. Please refresh.";
+      }} catch (err) {{
+        statusEl.textContent = "Network error. Please try again.";
+      }}
+    }};
+
+    worker.postMessage({{ challenge, difficulty }});
+  </script>
+</body>
+</html>"""

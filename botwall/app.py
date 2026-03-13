@@ -12,7 +12,15 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
-from .html import render_challenge_page, render_dashboard, render_decoy_page, render_origin_page, render_recovery_page, sdk_script
+from .html import (
+    render_challenge_page,
+    render_dashboard,
+    render_decoy_page,
+    render_origin_page,
+    render_recovery_page,
+    sdk_script,
+    render_gate_challenge_page,
+)
 from .models import (
     BeaconEvent,
     CheckResponse,
@@ -25,8 +33,10 @@ from .models import (
     TelemetryExport,
     TelemetryFingerprint,
     TelemetryImport,
+    GateVerifyRequest,
+    GateVerifyResponse,
 )
-from .proof import issue_proof_token, verify_proof_token
+from .proof import issue_proof_token, verify_proof_token, issue_gate_token
 from .scoring import apply_score, decide, score_beacon, score_request, score_telemetry_match, score_traversal
 from .telemetry import export_feed, fingerprint_from_beacon, parse_peer_secrets, verify_import
 from .state import StoreManager, init_store
@@ -229,10 +239,117 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store.store.save_session(session)
 
         page = render_challenge_page(session_id=session_id, token=token, nonce=nonce, target_path=target_path)
-        response = HTMLResponse(page)
-        response.headers["x-botwall-decision"] = "challenge"
-        _attach_cookie(response, cfg, session_id)
-        return response
+        return HTMLResponse(page)
+
+    @app.get("/bw/gate/challenge")
+    async def bw_gate_challenge(request: Request) -> HTMLResponse:
+        session_id = _get_session_id(request, cfg)
+        target_path = request.query_params.get("path", "/")
+        
+        import secrets
+        challenge = secrets.token_hex(16)
+        
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        session = store.store.load_session(session_id, ip_hash)
+        
+        diff = cfg.pow_default_difficulty
+        if request.headers.get("x-ip-reputation") == "bad" or session.get("gate_failures", 0) >= 2:
+            diff = cfg.pow_elevated_difficulty
+            
+        store.store.mark_once(f"pow:{challenge}", str(diff), cfg.pow_max_solve_seconds)
+        
+        page = render_gate_challenge_page(
+            session_id=session_id, 
+            challenge=challenge, 
+            difficulty=diff, 
+            target_path=target_path
+        )
+        return HTMLResponse(page)
+
+    @app.post("/bw/gate/verify", response_model=GateVerifyResponse)
+    async def bw_gate_verify(request: Request, payload: GateVerifyRequest) -> GateVerifyResponse | JSONResponse:
+        import hashlib
+        
+        challenge = payload.challenge
+        submitted_nonce = payload.nonce
+        
+        # Verify the challenge exists and is not expired (using mark_once as basic exist check, though it marks it)
+        # Note: mark_once returns True if it sets it (meaning it didn't exist). 
+        # Wait, actually we can just store the challenge in session or mark_once earlier? 
+        # If we didn't use redis properly to fetch difficulty, we can re-derive it
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        
+        session_id = _get_session_id(request, cfg)
+        session = store.store.load_session(session_id, ip_hash)
+        
+        diff = cfg.pow_default_difficulty
+        if request.headers.get("x-ip-reputation") == "bad" or session.get("gate_failures", 0) >= 2:
+            diff = cfg.pow_elevated_difficulty
+            
+        target = "0" * diff
+        input_bytes = (challenge + submitted_nonce).encode("utf-8")
+        computed_hash = hashlib.sha256(input_bytes).hexdigest()
+        
+        if not computed_hash.startswith(target):
+            session["gate_failures"] = session.get("gate_failures", 0) + 1
+            store.store.save_session(session)
+            return JSONResponse(status_code=400, content={"ok": False, "reason": "invalid_pow"})
+            
+        # Optional: anti-replay check
+        if not store.store.mark_once("pow_solved", challenge, cfg.pow_max_solve_seconds):
+            return JSONResponse(status_code=400, content={"ok": False, "reason": "replayed_pow"})
+
+        # Score environment
+        env_score = 0.0
+        env = payload.env_report
+        ua = request.headers.get("user-agent", "")
+        
+        if env.webdriver:
+            session["gate_failures"] = session.get("gate_failures", 0) + 2
+            store.store.save_session(session)
+            return JSONResponse(status_code=400, content={"ok": False, "reason": "webdriver_detected"})
+            
+        if "Chrome" in ua and not env.chrome_obj:
+            env_score -= 30
+        if env.plugins_count < 1:
+            env_score -= 15
+        if len(env.languages) < 2:
+            env_score -= 10
+        if not env.notification_api:
+            env_score -= 10
+        if "Chrome" in ua and not env.perf_memory:
+            env_score -= 10
+        if tuple(env.viewport) == (0, 0) or tuple(env.viewport) == (800, 600):
+            env_score -= 15
+        if env.renderer in ["none", "SwiftShader", "llvmpipe"]:
+            env_score -= 20
+            
+        token, _ = issue_gate_token(
+            secret=cfg.secret_key,
+            session_id=session_id,
+            ip_hash=ip_hash,
+            difficulty=diff,
+            env_score=env_score,
+            ttl_seconds=cfg.gate_ttl_seconds
+        )
+        
+        response = GateVerifyResponse(ok=True)
+        resp_obj = JSONResponse(content=response.model_dump())
+        resp_obj.set_cookie(
+            key=cfg.gate_cookie,
+            value=token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=cfg.gate_ttl_seconds,
+            path="/"
+        )
+        
+        session["gate_failures"] = 0
+        store.store.save_session(session)
+        return resp_obj
 
     @app.post("/bw/proof", response_model=DecisionState)
     async def bw_proof(request: Request, payload: ProofSubmission) -> JSONResponse:

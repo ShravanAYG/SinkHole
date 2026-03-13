@@ -115,3 +115,28 @@ class CheckResponse(BaseModel):
     score: float
     reasons: list[str]
 
+
+class EnvReport(BaseModel):
+    webdriver: bool
+    chrome_obj: bool
+    plugins_count: int
+    languages: list[str]
+    viewport: list[int]
+    notification_api: bool
+    perf_memory: bool
+    touch_support: bool
+    device_pixel_ratio: float
+    timezone: str
+    renderer: str
+
+
+class GateVerifyRequest(BaseModel):
+    challenge: str
+    nonce: str
+    env_report: EnvReport
+
+
+class GateVerifyResponse(BaseModel):
+    ok: bool
+    reason: str | None = None
+
