@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import uuid
+from urllib.parse import quote
+
 from .crypto import TokenError, now_ts, sign_json, verify_json
 
 
@@ -17,6 +20,7 @@ def issue_traversal_token(
         "sid": session_id,
         "iph": ip_hash,
         "path": page_path,
+        "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + ttl_seconds,
     }
@@ -51,3 +55,9 @@ def verify_traversal_token(
     if int(payload.get("exp", 0)) < now:
         return False
     return True
+
+
+def build_traversal_url(page_path: str, token: str) -> str:
+    encoded = quote(token, safe="")
+    separator = "&" if "?" in page_path else "?"
+    return f"{page_path}{separator}bw_trace={encoded}"

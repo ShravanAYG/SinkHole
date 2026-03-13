@@ -26,9 +26,13 @@ Layered anti-scraping prototype with challenge-based proof, behavioral scoring, 
 - Two-step human recovery flow.
 - Opt-in telemetry mesh feed import/export with signatures.
 - Nginx/Caddy/Apache integration artifacts under `deploy/`.
+- Team-2 implementation guide under `TEAM2_IMPLEMENTATION.md`.
 
 ## API Endpoints
 
+- `GET /bw/gate/challenge`
+- `POST /bw/gate/verify`
+- `GET /bw/gate/check`
 - `GET /bw/check`
 - `GET /bw/challenge`
 - `POST /bw/proof`
@@ -52,12 +56,31 @@ python3 -m venv .venv
 
 Server default: `http://127.0.0.1:4000`
 
-## Test
+## Real-Life Validation
 
 ```bash
 cd /home/bb/sinkhole
-.venv/bin/pytest
+.venv/bin/python scripts/team2_logic_check.py
+.venv/bin/python scripts/realworld_validation.py
 ```
+
+## Local Integration Demo (Template Website)
+
+```bash
+cd /home/bb/sinkhole
+.venv/bin/python scripts/localhost_integration_demo.py
+```
+
+This runs a complete local flow with:
+
+- demo origin site
+- gateway simulation of reverse-proxy integration
+- SinkHole botwall
+- Stage-1 gate pass + Stage-2 challenge/proof + decoy + recovery validation
+
+## Integration Docs
+
+See `INTEGRATION_GUIDE.md` for Nginx-first integration and endpoint contracts.
 
 ## Config (env vars)
 

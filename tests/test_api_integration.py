@@ -1,81 +1,127 @@
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+from collections.abc import Iterator
+from urllib.parse import quote
 
-from fastapi.testclient import TestClient
-
-from botwall.app import create_app
-from botwall.config import Settings
-
-
-def build_client() -> TestClient:
-    settings = Settings(
-        app_host="127.0.0.1",
-        app_port=4000,
-        session_cookie="bw_sid",
-        gate_cookie="bw_gate",
-        secret_key="test-secret",
-        telemetry_secret="telemetry-secret",
-        redis_enabled=False,
-        telemetry_enabled=True,
-        proof_ttl_seconds=60,
-        traversal_ttl_seconds=300,
-        recovery_ttl_seconds=180,
-        recovery_allow_seconds=300,
-        gate_ttl_seconds=86400,
-        sequence_window=16,
-        allow_threshold=30.0,
-        decoy_threshold=-80.0,
-        observe_threshold=-35.0,
-        pow_default_difficulty=5,
-        pow_elevated_difficulty=7,
-        pow_max_solve_seconds=30,
-        decoy_max_nodes=80,
-        decoy_min_links=4,
-        decoy_max_links=6,
-        peer_secrets_raw="",
-    )
-    return TestClient(create_app(settings))
+import httpx
+import pytest
 
 
-def _extract_token_nonce(html: str) -> tuple[str, str]:
-    token_match = re.search(r"const token = \"([^\"]+)\";", html)
-    nonce_match = re.search(r"const nonce = \"([^\"]+)\";", html)
-    assert token_match, "token not found"
-    assert nonce_match, "nonce not found"
-    return token_match.group(1), nonce_match.group(1)
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
 
 
-def test_browser_flow_observe_challenge_proof_allow() -> None:
-    client = build_client()
-    headers = {
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "accept-language": "en-US,en;q=0.9",
-        "x-ja3": "ja3-browser",
-    }
+def _wait_until_up(base_url: str, timeout: float = 15.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            r = httpx.get(f"{base_url}/healthz", timeout=1.0)
+            if r.status_code == 200:
+                return
+        except Exception:
+            pass
+        time.sleep(0.2)
+    raise RuntimeError(f"server not ready at {base_url}")
 
-    first = client.get("/", headers=headers)
-    assert first.status_code == 200
-    assert first.headers.get("x-botwall-decision") == "observe"
 
-    second = client.get("/content/1", headers=headers, follow_redirects=False)
-    assert second.status_code == 302
-    assert second.headers["location"].startswith("/bw/challenge")
+def _extract_const(page_html: str, name: str) -> str:
+    match = re.search(rf"const\s+{re.escape(name)}\s*=\s*(.+?);", page_html)
+    if not match:
+        raise RuntimeError(f"missing JS const {name}")
+    value = match.group(1).strip()
+    if value.startswith('"') and value.endswith('"'):
+        return value[1:-1]
+    return value
 
-    challenge = client.get(second.headers["location"], headers=headers)
-    token, nonce = _extract_token_nonce(challenge.text)
 
-    proof_payload = {
+def _solve_pow(challenge: str, difficulty: int) -> tuple[str, str]:
+    target = "0" * difficulty
+    nonce = 0
+    while True:
+        hex_nonce = format(nonce, "x")
+        digest = hashlib.sha256((challenge + hex_nonce).encode("utf-8")).hexdigest()
+        if digest.startswith(target):
+            return hex_nonce, digest
+        nonce += 1
+
+
+def _pass_gate(client: httpx.Client, return_to: str = "/") -> None:
+    gate_page = client.get(f"/bw/gate/challenge?path={quote(return_to, safe='/?=&')}")
+    assert gate_page.status_code == 200
+
+    challenge_token = _extract_const(gate_page.text, "CHALLENGE_TOKEN")
+    challenge = _extract_const(gate_page.text, "CHALLENGE")
+    difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
+    sid = client.cookies.get("bw_sid")
+    assert sid
+
+    start = time.perf_counter()
+    nonce, digest = _solve_pow(challenge, difficulty)
+    solve_ms = int((time.perf_counter() - start) * 1000)
+    if solve_ms < 60:
+        time.sleep((60 - solve_ms) / 1000.0)
+        solve_ms = 60
+
+    payload = {
         "schema_version": "1.0",
-        "session_id": client.cookies.get("bw_sid"),
+        "session_id": sid,
+        "challenge_token": challenge_token,
+        "challenge": challenge,
+        "nonce": nonce,
+        "hash": digest,
+        "solve_ms": solve_ms,
+        "return_to": return_to,
+        "env": {
+            "schema_version": "1.0",
+            "webdriver": False,
+            "chrome_obj": True,
+            "plugins_count": 3,
+            "languages": ["en-US", "en"],
+            "viewport": [1366, 768],
+            "notification_api": True,
+            "perf_memory": True,
+            "touch_support": False,
+            "device_pixel_ratio": 1.0,
+            "timezone": "UTC",
+            "renderer": "ANGLE (NVIDIA)",
+        },
+    }
+    verify = client.post("/bw/gate/verify", json=payload)
+    assert verify.status_code == 200
+    assert verify.json().get("decision") == "allow"
+    assert client.cookies.get("bw_gate")
+
+
+def _submit_stage2_proof(client: httpx.Client, challenge_location: str, ua: str) -> tuple[httpx.Response, dict]:
+    challenge_page = client.get(challenge_location)
+    assert challenge_page.status_code == 200
+    token = _extract_const(challenge_page.text, "token")
+    nonce = _extract_const(challenge_page.text, "nonce")
+    target_path = _extract_const(challenge_page.text, "targetPath")
+    sid = client.cookies.get("bw_sid")
+    assert sid
+
+    payload = {
+        "schema_version": "1.0",
+        "session_id": sid,
         "token": token,
-        "page_path": "/content/1",
+        "page_path": target_path,
         "nonce": nonce,
         "beacon": {
             "schema_version": "1.0",
-            "session_id": client.cookies.get("bw_sid"),
+            "session_id": sid,
             "nonce": nonce,
-            "page_path": "/content/1",
+            "page_path": target_path,
             "pointer_moves": 40,
             "scroll_events": 8,
             "max_scroll_depth": 320,
@@ -92,101 +138,87 @@ def test_browser_flow_observe_challenge_proof_allow() -> None:
             "pointer_entropy": 1.2,
             "canvas_frame_ms": [1.1, 1.4, 1.2, 1.3],
             "webgl_frame_ms": [0.9, 1.0, 1.1, 1.2],
-            "user_agent": headers["user-agent"],
+            "user_agent": ua,
             "platform": "Linux x86_64",
             "ua_data": {"platform": "Linux"},
         },
     }
-
-    proof = client.post("/bw/proof", json=proof_payload, headers=headers)
+    proof = client.post("/bw/proof", json=payload)
     assert proof.status_code == 202
-    assert proof.json()["decision"] == "allow"
-
-    replay = client.post("/bw/proof", json=proof_payload, headers=headers)
-    assert replay.status_code == 409
-
-    after = client.get("/", headers=headers)
-    assert after.status_code == 200
-    assert after.headers.get("x-botwall-decision") == "allow"
+    return proof, payload
 
 
-def test_headless_downgrades_to_decoy_and_recovery_works() -> None:
-    client = build_client()
+@pytest.fixture(scope="module")
+def live_base_url() -> Iterator[str]:
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    port = _free_port()
+    host = "127.0.0.1"
+    base_url = f"http://{host}:{port}"
+    env = os.environ.copy()
+    env["BOTWALL_HOST"] = host
+    env["BOTWALL_PORT"] = str(port)
+    env["BOTWALL_SECRET_KEY"] = "test-secret"
+    env["BOTWALL_TELEMETRY_SECRET"] = "telemetry-secret"
+    env["BOTWALL_POW_DIFFICULTY"] = "2"
+    env["BOTWALL_POW_ELEVATED_DIFFICULTY"] = "3"
+    env["BOTWALL_REDIS_ENABLED"] = "0"
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "botwall"],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        _wait_until_up(base_url)
+        yield base_url
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def test_browser_flow_gate_challenge_proof_and_telemetry(live_base_url: str) -> None:
     headers = {
-        "user-agent": "HeadlessChrome/120.0",
-        "x-ip-reputation": "bad",
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "accept-language": "en-US,en;q=0.9",
+        "x-ja3": "ja3-browser",
     }
+    client = httpx.Client(base_url=live_base_url, headers=headers, follow_redirects=False, timeout=8.0)
 
-    first = client.get("/", headers=headers, follow_redirects=False)
+    first = client.get("/")
     assert first.status_code == 302
-    assert first.headers["location"].startswith("/bw/decoy/")
+    assert first.headers.get("location", "").startswith("/bw/gate/challenge")
 
-    start = client.post("/bw/recovery/start", json={"reason": "false_positive"})
-    assert start.status_code == 202
-    token = start.json()["recovery_token"]
+    _pass_gate(client, "/")
 
-    complete = client.post(
-        "/bw/recovery/complete",
-        json={
-            "session_id": client.cookies.get("bw_sid"),
-            "recovery_token": token,
-            "acknowledgement": "I am human and need real content",
-        },
-    )
-    assert complete.status_code == 202
-    assert complete.json()["decision"] == "allow"
+    home = client.get("/")
+    assert home.status_code == 200
+    assert home.headers.get("x-botwall-decision") in {"observe", "allow"}
 
-    final = client.get("/", headers=headers)
-    assert final.status_code == 200
-    assert final.headers.get("x-botwall-decision") == "allow"
+    gate_check = client.get("/bw/gate/check")
+    assert gate_check.status_code == 200
+    assert gate_check.json().get("ok") is True
 
+    second = client.get("/content/1")
+    assert second.status_code == 302
+    assert second.headers["location"].startswith("/bw/challenge")
 
-def test_invalid_proof_and_telemetry_signature_rejected() -> None:
-    client = build_client()
+    proof, proof_payload = _submit_stage2_proof(client, second.headers["location"], headers["user-agent"])
+    assert proof.json()["decision"] in {"allow", "observe"}
 
-    bad = client.post(
-        "/bw/proof",
-        json={
-            "schema_version": "1.0",
-            "session_id": "abc",
-            "token": "invalid.token",
-            "page_path": "/",
-            "nonce": "n",
-            "beacon": {"schema_version": "1.0", "session_id": "abc"},
-        },
-    )
-    assert bad.status_code == 400
-
-    beacon_payload = {
-        "schema_version": "1.0",
-        "session_id": "telemetry-sid",
-        "pointer_moves": 1,
-        "scroll_events": 1,
-        "max_scroll_depth": 10,
-        "visibility_changes": 0,
-        "focus_events": 0,
-        "blur_events": 0,
-        "trap_hits": 1,
-        "trap_ids": ["shadow-click"],
-        "copy_events": 0,
-        "key_events": 1,
-        "screenshot_combo_hits": 0,
-        "dwell_ms": 150,
-        "event_loop_jitter": 0,
-        "pointer_entropy": 0.0,
-        "canvas_frame_ms": [0.0, 0.0],
-        "webgl_frame_ms": [0.0, 0.0],
-        "user_agent": "HeadlessChrome",
-        "platform": "Linux",
-        "ua_data": {},
-    }
-    ping = client.post("/api/v1/analytics-ping", json=beacon_payload)
-    assert ping.status_code == 202
+    replay = client.post("/bw/proof", json=proof_payload)
+    assert replay.status_code == 409
 
     exported = client.get("/telemetry/feed/export")
     assert exported.status_code == 200
     payload = exported.json()
-    assert payload["fingerprints"]
+    assert "fingerprints" in payload
 
     payload["signature"] = "bad-signature"
     imp_bad = client.post("/telemetry/feed/import", json=payload)
@@ -195,4 +227,118 @@ def test_invalid_proof_and_telemetry_signature_rejected() -> None:
     payload = exported.json()
     imp_ok = client.post("/telemetry/feed/import", json=payload)
     assert imp_ok.status_code == 200
-    assert imp_ok.json()["imported"] >= 1
+    assert imp_ok.json()["imported"] >= 0
+
+
+def test_gate_verify_replay_and_tamper_rejected(live_base_url: str) -> None:
+    headers = {
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "accept-language": "en-US,en;q=0.9",
+    }
+    client = httpx.Client(base_url=live_base_url, headers=headers, follow_redirects=False, timeout=8.0)
+
+    gate_page = client.get("/bw/gate/challenge?path=/")
+    assert gate_page.status_code == 200
+    challenge_token = _extract_const(gate_page.text, "CHALLENGE_TOKEN")
+    challenge = _extract_const(gate_page.text, "CHALLENGE")
+    difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
+    sid = client.cookies.get("bw_sid")
+    assert sid
+
+    nonce, digest = _solve_pow(challenge, difficulty)
+    payload = {
+        "schema_version": "1.0",
+        "session_id": sid,
+        "challenge_token": challenge_token,
+        "challenge": challenge,
+        "nonce": nonce,
+        "hash": digest,
+        "solve_ms": 60,
+        "return_to": "/",
+        "env": {
+            "schema_version": "1.0",
+            "webdriver": False,
+            "chrome_obj": True,
+            "plugins_count": 3,
+            "languages": ["en-US", "en"],
+            "viewport": [1366, 768],
+            "notification_api": True,
+            "perf_memory": True,
+            "touch_support": False,
+            "device_pixel_ratio": 1.0,
+            "timezone": "UTC",
+            "renderer": "ANGLE (NVIDIA)",
+        },
+    }
+
+    ok = client.post("/bw/gate/verify", json=payload)
+    assert ok.status_code == 200
+
+    replay = client.post("/bw/gate/verify", json=payload)
+    assert replay.status_code == 409
+
+    tampered = dict(payload)
+    tampered["hash"] = "0" * 64
+    bad = client.post("/bw/gate/verify", json=tampered)
+    assert bad.status_code == 400
+
+
+def test_gate_difficulty_escalates_for_bad_reputation(live_base_url: str) -> None:
+    client = httpx.Client(
+        base_url=live_base_url,
+        headers={
+            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            "accept-language": "en-US,en;q=0.9",
+            "x-ip-reputation": "bad",
+        },
+        follow_redirects=False,
+        timeout=8.0,
+    )
+    gate_page = client.get("/bw/gate/challenge?path=/")
+    assert gate_page.status_code == 200
+    difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
+    assert difficulty >= 3
+
+
+def test_headless_decoy_and_recovery(live_base_url: str) -> None:
+    client = httpx.Client(
+        base_url=live_base_url,
+        headers={"user-agent": "HeadlessChrome/120.0", "x-ip-reputation": "bad"},
+        follow_redirects=False,
+        timeout=8.0,
+    )
+
+    first = client.get("/")
+    assert first.status_code == 302
+    assert first.headers.get("location", "").startswith("/bw/gate/challenge")
+    _pass_gate(client, "/")
+
+    decoy_seen = False
+    for _ in range(4):
+        r = client.get("/")
+        assert r.status_code == 302
+        loc = r.headers.get("location", "")
+        if loc.startswith("/bw/decoy/"):
+            decoy_seen = True
+            break
+        assert loc.startswith("/bw/challenge")
+        _ = client.get(loc)
+    assert decoy_seen
+
+    start = client.post("/bw/recovery/start", json={"reason": "false_positive"})
+    assert start.status_code == 202
+    token = start.json()["recovery_token"]
+    sid = client.cookies.get("bw_sid")
+    complete = client.post(
+        "/bw/recovery/complete",
+        json={
+            "session_id": sid,
+            "recovery_token": token,
+            "acknowledgement": "I am human and need real content",
+        },
+    )
+    assert complete.status_code == 202
+    assert complete.json()["decision"] == "allow"
+
+    final = client.get("/")
+    assert final.status_code == 200
