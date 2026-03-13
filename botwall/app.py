@@ -94,6 +94,71 @@ def _request_meta(request: Request) -> dict[str, str]:
     }
 
 
+def _explicit_scraper_reasons(request: Request) -> list[str]:
+    ua = request.headers.get("user-agent", "").lower()
+    accept = request.headers.get("accept", "").lower().strip()
+    accept_language = request.headers.get("accept-language", "").strip()
+    ip_reputation = request.headers.get("x-ip-reputation", "unknown").lower().strip()
+
+    markers = [
+        "curl",
+        "wget",
+        "python-requests",
+        "python-urllib",
+        "httpx",
+        "aiohttp",
+        "go-http-client",
+        "libwww-perl",
+        "scrapy",
+        "headless",
+        "puppeteer",
+        "playwright",
+        "selenium",
+    ]
+    reasons: list[str] = []
+    match = next((marker for marker in markers if marker in ua), None)
+    if not match:
+        return reasons
+
+    reasons.append(f"pregate:explicit_scraper_ua:{match}")
+    if not accept_language:
+        reasons.append("pregate:missing_accept_language")
+    if accept in {"", "*/*"}:
+        reasons.append("pregate:generic_accept_header")
+    if ip_reputation == "bad":
+        reasons.append("pregate:ip_reputation_bad")
+    return reasons
+
+
+def _redirect_explicit_scraper_to_decoy(
+    *,
+    request: Request,
+    settings: Settings,
+    store: StoreManager,
+    node_id: int,
+) -> Response | None:
+    reasons = _explicit_scraper_reasons(request)
+    if not reasons:
+        return None
+
+    session_id = _get_session_id(request, settings)
+    client_ip = _client_ip(request)
+    ip_hash = hash_client_ip(client_ip, settings.secret_key)
+    session = store.store.load_session(session_id, ip_hash)
+    session["score"] = min(float(session.get("score", 0.0)), settings.decoy_threshold - 5.0)
+    session.setdefault("reasons", []).extend(reasons)
+    _record_decision(session, "decoy", reasons)
+    session["last_user_agent"] = request.headers.get("user-agent", "")
+    session["updated_at"] = now_ts()
+    store.store.save_session(session)
+
+    response = RedirectResponse(url=f"/bw/decoy/{node_id % settings.decoy_max_nodes}?sid={session_id}", status_code=302)
+    response.headers["x-botwall-decision"] = "decoy"
+    response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
+    _attach_cookie(response, settings, session_id)
+    return response
+
+
 def _make_links(settings: Settings, session_id: str, ip_hash: str, page_id: int) -> list[tuple[str, str]]:
     links: list[tuple[str, str]] = []
     for offset in [1, 2, 3]:
@@ -418,6 +483,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def bw_check(request: Request) -> JSONResponse:
         fallback = request.query_params.get("path", "/")
         target_path = _canonical_target_path(request, fallback)
+        pre_gate_reasons = _explicit_scraper_reasons(request)
+        if pre_gate_reasons:
+            session_id = _get_session_id(request, cfg)
+            client_ip = _client_ip(request)
+            ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+            session = store.store.load_session(session_id, ip_hash)
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 5.0)
+            session.setdefault("reasons", []).extend(pre_gate_reasons)
+            _record_decision(session, "decoy", pre_gate_reasons)
+            store.store.save_session(session)
+            payload = CheckResponse(
+                session_id=session_id,
+                decision="decoy",
+                score=float(session.get("score", 0.0)),
+                reasons=pre_gate_reasons,
+            )
+            response = JSONResponse(payload.model_dump(mode="json"))
+            response.headers["x-botwall-decision"] = "decoy"
+            response.headers["x-botwall-score"] = f"{float(session.get('score', 0.0)):.2f}"
+            response.headers["x-botwall-reasons"] = ",".join(pre_gate_reasons[-6:])
+            _attach_cookie(response, cfg, session_id)
+            return response
         require_traversal = target_path.startswith("/content/")
         session, session_id, reasons, decision, _ = _evaluate_request(
             request=request,
@@ -748,6 +835,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/")
     async def home(request: Request) -> Response:
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
         client_ip = _client_ip(request)
         ip_hash   = hash_client_ip(client_ip, cfg.secret_key)
         gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
@@ -781,6 +872,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/content/{page_id}")
     async def content_page(page_id: int, request: Request) -> Response:
         target_path = f"/content/{page_id}"
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=page_id)
+        if pre_gate is not None:
+            return pre_gate
+
         client_ip   = _client_ip(request)
         ip_hash_pre = hash_client_ip(client_ip, cfg.secret_key)
         gate_ok, _  = _check_gate_cookie(request, cfg, ip_hash_pre)

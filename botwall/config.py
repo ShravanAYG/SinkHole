@@ -129,8 +129,8 @@ class Settings:
     gate_ttl_seconds: int = 86400
 
     # PoW (Stage 1)
-    pow_default_difficulty: int = 5
-    pow_elevated_difficulty: int = 7
+    pow_default_difficulty: int = 4
+    pow_elevated_difficulty: int = 5
     pow_max_solve_seconds: int = 30
 
     # Decoy
@@ -220,8 +220,8 @@ def load_settings() -> Settings:
         recovery_allow_seconds=int(_env("BOTWALL_RECOVERY_ALLOW", t("tokens", "recovery_allow_seconds", default=300), cast=int)),
         gate_ttl_seconds=int(_env("BOTWALL_GATE_TTL", t("tokens", "gate_ttl_seconds", default=86400), cast=int)),
         # PoW
-        pow_default_difficulty=int(_env("BOTWALL_POW_DIFFICULTY", t("pow", "default_difficulty", default=5), cast=int)),
-        pow_elevated_difficulty=int(_env("BOTWALL_POW_ELEVATED_DIFFICULTY", t("pow", "elevated_difficulty", default=7), cast=int)),
+        pow_default_difficulty=int(_env("BOTWALL_POW_DIFFICULTY", t("pow", "default_difficulty", default=4), cast=int)),
+        pow_elevated_difficulty=int(_env("BOTWALL_POW_ELEVATED_DIFFICULTY", t("pow", "elevated_difficulty", default=5), cast=int)),
         pow_max_solve_seconds=int(_env("BOTWALL_POW_MAX_SOLVE", t("pow", "max_solve_seconds", default=30), cast=int)),
         # Decoy
         decoy_max_nodes=int(_env("BOTWALL_DECOY_MAX_NODES", t("decoy", "max_nodes", default=80), cast=int)),

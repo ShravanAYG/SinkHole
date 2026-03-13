@@ -100,16 +100,16 @@ def post_json(path: str, payload: dict, cookies: str = "") -> tuple[int, dict, d
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SCENARIO 1-4: Bots hit the gate
+# SCENARIO 1-4: Bots hit the decoy immediately
 # ═══════════════════════════════════════════════════════════════════════════
-section("SCENARIO 1-4: Bot / Scraper probes (no gate cookie)")
+section("SCENARIO 1-4: Bot / Scraper probes (pre-gate decoy)")
 
 # 1. curl bare request
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "curl/7.81.0"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "1. curl bot → redirected to gate challenge",
+    status == 302 and "/bw/decoy/" in loc,
+    "1. curl bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 
@@ -117,8 +117,8 @@ check(
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "Wget/1.21.1"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "2. wget bot → redirected to gate challenge",
+    status == 302 and "/bw/decoy/" in loc,
+    "2. wget bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 
@@ -126,8 +126,8 @@ check(
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "python-requests/2.31.0"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "3. python-requests bot → redirected to gate challenge",
+    status == 302 and "/bw/decoy/" in loc,
+    "3. python-requests bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 
@@ -138,8 +138,8 @@ status, hdrs, body = req("GET", "/", headers={
 })
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "4. HeadlessChrome + bad IP → redirected to gate (not served)",
+    status == 302 and "/bw/decoy/" in loc,
+    "4. HeadlessChrome + bad IP → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 

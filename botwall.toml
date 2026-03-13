@@ -103,8 +103,8 @@ gate_ttl_seconds        = 86400   # 24 hours
 [pow]
 # Proof-of-Work settings for Stage 1 entry gate.
 # difficulty: number of leading zero hex chars required in SHA-256 hash.
-default_difficulty    = 5
-elevated_difficulty   = 7    # applied to known-bad IPs / repeated failures
+default_difficulty    = 4
+elevated_difficulty   = 5    # applied to known-bad IPs / repeated failures
 max_solve_seconds     = 30   # auto-fail if browser takes longer than this
 
 [decoy]

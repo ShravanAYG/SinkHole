@@ -44,8 +44,12 @@ def score_request(
     reasons: list[str] = []
     delta = 0.0
 
-    bot_markers = ["headless", "puppeteer", "playwright", "selenium", "phantomjs", "curl", "wget"]
-    if any(marker in ua for marker in bot_markers):
+    hard_bot_markers = ["curl", "wget", "python-requests", "python-urllib", "httpx", "aiohttp", "go-http-client", "libwww-perl", "scrapy", "headless"]
+    bot_markers = ["puppeteer", "playwright", "selenium", "phantomjs"]
+    if any(marker in ua for marker in hard_bot_markers):
+        delta += weights.ua_bot_marker * 2
+        reasons.append("request:hard_bot_ua_marker")
+    elif any(marker in ua for marker in bot_markers):
         delta += weights.ua_bot_marker
         reasons.append("request:automation_ua_marker")
     elif "mozilla" in ua:

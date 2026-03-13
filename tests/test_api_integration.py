@@ -300,6 +300,19 @@ def test_gate_difficulty_escalates_for_bad_reputation(live_base_url: str) -> Non
     assert difficulty >= 3
 
 
+def test_explicit_scrapers_are_sent_to_decoy_before_gate(live_base_url: str) -> None:
+    for ua in ["curl/8.5.0", "Wget/1.21.4", "python-requests/2.31.0"]:
+        client = httpx.Client(
+            base_url=live_base_url,
+            headers={"user-agent": ua},
+            follow_redirects=False,
+            timeout=8.0,
+        )
+        response = client.get("/")
+        assert response.status_code == 302
+        assert response.headers.get("location", "").startswith("/bw/decoy/")
+
+
 def test_headless_decoy_and_recovery(live_base_url: str) -> None:
     client = httpx.Client(
         base_url=live_base_url,
@@ -310,20 +323,7 @@ def test_headless_decoy_and_recovery(live_base_url: str) -> None:
 
     first = client.get("/")
     assert first.status_code == 302
-    assert first.headers.get("location", "").startswith("/bw/gate/challenge")
-    _pass_gate(client, "/")
-
-    decoy_seen = False
-    for _ in range(4):
-        r = client.get("/")
-        assert r.status_code == 302
-        loc = r.headers.get("location", "")
-        if loc.startswith("/bw/decoy/"):
-            decoy_seen = True
-            break
-        assert loc.startswith("/bw/challenge")
-        _ = client.get(loc)
-    assert decoy_seen
+    assert first.headers.get("location", "").startswith("/bw/decoy/")
 
     start = client.post("/bw/recovery/start", json={"reason": "false_positive"})
     assert start.status_code == 202
