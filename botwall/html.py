@@ -778,26 +778,172 @@ def render_gate_challenge_page(
       webdriver: false,
       chrome_obj: false,
       plugins_count: 0,
+      plugins_detail: [],
       languages: [],
       viewport: [0, 0],
+      screen_avail_width: 0,
+      screen_avail_height: 0,
+      device_pixel_ratio: 1,
       notification_api: false,
       perf_memory: false,
+      hardware_concurrency: 0,
+      device_memory: 0,
       touch_support: false,
-      device_pixel_ratio: 1,
       timezone: "",
       renderer: "unknown",
+      automation_score: 0,
+      container_indicators: [],
+      cdp_detected: false,
+      permissions: {},
+      js_globals: [],
+      solve_time_ms: 0,
     };
 
     try { report.webdriver = navigator.webdriver === true; } catch (_) {}
     try { report.chrome_obj = typeof window.chrome !== "undefined"; } catch (_) {}
     try { report.plugins_count = navigator.plugins ? navigator.plugins.length : 0; } catch (_) {}
+    
+    // Detailed plugin info for fingerprinting
+    try {
+      if (navigator.plugins) {
+        report.plugins_detail = Array.from(navigator.plugins).slice(0, 5).map(p => ({
+          name: p.name || "",
+          description: p.description || "",
+          filename: p.filename || "",
+        }));
+      }
+    } catch (_) {}
+    
     try { report.languages = Array.from(navigator.languages || []); } catch (_) {}
     try { report.viewport = [window.innerWidth || 0, window.innerHeight || 0]; } catch (_) {}
+    try { report.screen_avail_width = window.screen ? window.screen.availWidth || 0 : 0; } catch (_) {}
+    try { report.screen_avail_height = window.screen ? window.screen.availHeight || 0 : 0; } catch (_) {}
     try { report.notification_api = typeof Notification !== "undefined"; } catch (_) {}
     try { report.perf_memory = "memory" in performance; } catch (_) {}
     try { report.touch_support = "ontouchstart" in window || navigator.maxTouchPoints > 0; } catch (_) {}
     try { report.device_pixel_ratio = window.devicePixelRatio || 1; } catch (_) {}
     try { report.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (_) {}
+    try { report.hardware_concurrency = navigator.hardwareConcurrency || 0; } catch (_) {}
+    try { report.device_memory = navigator.deviceMemory || 0; } catch (_) {}
+
+    // Advanced automation detection for services like Firecrawl
+    try {
+      let autoScore = 0;
+      
+      // Check for automation properties that stealth plugins can't fully hide
+      if (window.outerWidth === 0 && window.outerHeight === 0) autoScore += 25;
+      if (window.devicePixelRatio === 1 && window.screen?.width > 1920) autoScore += 15;
+      
+      // Check for Chrome's automation signature (CDP)
+      if (window.chrome && window.chrome.runtime) {
+        // Check if chrome.runtime is a mock (real Chrome has specific properties)
+        const runtimeKeys = Object.keys(window.chrome.runtime);
+        if (runtimeKeys.length < 3) {
+          autoScore += 20;  // Suspiciously minimal runtime object
+        }
+      }
+      
+      // Check for overridden properties (stealth patches leave traces)
+      const navProto = Navigator.prototype;
+      const webdriverDesc = Object.getOwnPropertyDescriptor(navProto, 'webdriver');
+      if (webdriverDesc && webdriverDesc.get) {
+        // If webdriver is overridden via prototype, it's likely stealth
+        const getterStr = webdriverDesc.get.toString();
+        if (getterStr.includes('false') && getterStr.length < 50) {
+          autoScore += 15;
+        }
+      }
+      
+      // Permission API checks - headless often returns 'prompt' for everything
+      if (navigator.permissions) {
+        // We already query permissions above, but check consistency
+        const permKeys = Object.keys(permissions);
+        const allPrompt = permKeys.every(k => permissions[k] === 'prompt');
+        if (allPrompt && permKeys.length >= 3) {
+          autoScore += 10;  // Suspicious: all permissions in 'prompt' state
+        }
+      }
+      
+      // Check for known automation globals
+      const automationGlobals = [
+        "__webdriver_script_fn", "__selenium_evaluate", "__selenium_unwrapped",
+        "__fxdriver_evaluate", "_phantom", "callPhantom", "_selenium",
+        "callSelenium", "domAutomation", "cdc_adoQpoasnfa76pfcZLmcfl_",
+        "__nightmare", "__phantomas__", "callPhantom",
+      ];
+      for (const g of automationGlobals) {
+        if (g in window) {
+          autoScore += 20;
+          report.js_globals.push(g);
+        }
+      }
+      
+      // Check for Playwright-specific markers
+      if (window.navigator.userAgent.includes('Chrome') && !window.chrome?.app) {
+        // Chrome UA but no chrome.app could indicate Playwright
+        autoScore += 10;
+      }
+      
+      report.automation_score = autoScore;
+    } catch (_) {}
+    
+    // Container/Cloud environment detection
+    try {
+      const indicators = [];
+      
+      // Check for common container/cloud user agents or properties
+      const ua = navigator.userAgent.toLowerCase();
+      if (ua.includes("headless")) indicators.push("headless_ua");
+      if (ua.includes("crawl")) indicators.push("crawl_in_ua");
+      
+      // Missing properties often indicate containers
+      if (!navigator.permissions) indicators.push("no_permissions_api");
+      if (!navigator.clipboard) indicators.push("no_clipboard_api");
+      
+      // Cloud-specific timing signatures (very consistent performance)
+      const perfEntries = performance.getEntriesByType("navigation");
+      if (perfEntries.length > 0) {
+        const nav = perfEntries[0];
+        // If DNS/TCP times are 0 or extremely consistent, likely cloud proxy
+        if (nav.domainLookupEnd - nav.domainLookupStart === 0) indicators.push("zero_dns_time");
+      }
+      
+      report.container_indicators = indicators;
+    } catch (_) {}
+    
+    // CDP (Chrome DevTools Protocol) detection - used by Firecrawl, Puppeteer, Playwright
+    try {
+      // CDP leaves traces in the Chrome object
+      if (window.chrome && window.chrome.runtime && window.chrome.runtime.OnInstalledReason === undefined) {
+        // This is a sign of mocked chrome object
+        report.cdp_detected = true;
+      }
+      
+      // Check for DevTools-only properties
+      const devtoolsProps = ["__REACT_DEVTOOLS_GLOBAL_HOOK__", "__VUE_DEVTOOLS_GLOBAL_HOOK__"];
+      for (const p of devtoolsProps) {
+        if (p in window) {
+          report.cdp_detected = true;
+          break;
+        }
+      }
+    } catch (_) {}
+    
+    // Permission API check
+    try {
+      if (navigator.permissions) {
+        // Query common permissions - headless/cloud often have specific patterns
+        const permissionNames = ["midi", "notifications", "clipboard-read", "clipboard-write"];
+        for (const name of permissionNames) {
+          try {
+            const status = await navigator.permissions.query({ name });
+            report.permissions[name] = status.state;
+          } catch (_) {
+            report.permissions[name] = "unsupported";
+          }
+        }
+      }
+    } catch (_) {}
 
     try {
       const canvas = document.createElement("canvas");
@@ -844,6 +990,8 @@ def render_gate_challenge_page(
     return_to: RETURN_TO,
     env: env,
   };
+  // Record solve time for analysis
+  env.solve_time_ms = powResult.solveMs;
 
   let resp;
   try {
@@ -1286,14 +1434,28 @@ def render_decoy_page(node: DecoyNode, session_id: str) -> str:
 
 
 def render_bot_caught_page(*, session_id: str, user_agent: str = "", reasons: list[str] | None = None) -> str:
-    """Render the 'YOU LOWDE BOT' page for detected scrapers/crawlers."""
+    """Render the 'YOU LOWDE BOT' page for detected scrapers/crawlers with absolute clarity."""
     reasons_html = ""
     if reasons:
-        items = "".join(f"<li>{html.escape(r)}</li>" for r in reasons[-6:])
+        items = "".join(f"<li><code>{html.escape(r)}</code></li>" for r in reasons[-8:])
         reasons_html = f"<ul class='reasons'>{items}</ul>"
-
+    
+    # Categorize detection reasons for clarity
+    detection_type = "GENERIC BOT"
+    for r in reasons or []:
+        r_lower = r.lower()
+        if "firecrawl" in r_lower:
+            detection_type = "🔥 FIRECRAWL DETECTED"
+            break
+        elif "scraper" in r_lower or "crawl" in r_lower:
+            detection_type = "WEB SCRAPER"
+            break
+        elif "automation" in r_lower or "cdp" in r_lower:
+            detection_type = "AUTOMATION FRAMEWORK"
+            break
+    
     ua_display = html.escape(user_agent[:200]) if user_agent else "Unknown"
-
+    
     return f"""<!doctype html>
 <html>
 <head>
@@ -1301,7 +1463,7 @@ def render_bot_caught_page(*, session_id: str, user_agent: str = "", reasons: li
   <meta name="robots" content="noindex,nofollow,noarchive" />
   <title>YOU LOWDE BOT - SinkHole</title>
   <style>
-    :root {{ --bg: #0a0a0a; --surface: #111; --border: #333; --text: #e0e0e0; --accent: #ff4444; --muted: #666; }}
+    :root {{ --bg: #0a0a0a; --surface: #111; --border: #333; --text: #e0e0e0; --accent: #ff4444; --muted: #666; --fire: #ff6600; }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
@@ -1310,40 +1472,80 @@ def render_bot_caught_page(*, session_id: str, user_agent: str = "", reasons: li
       align-items: center;
       justify-content: center;
       background: var(--bg);
+      background-image: 
+        radial-gradient(circle at 20% 50%, rgba(255, 68, 68, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(255, 102, 0, 0.1) 0%, transparent 40%);
       color: var(--text);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
       padding: 2rem;
     }}
     .container {{
       text-align: center;
-      max-width: 700px;
+      max-width: 800px;
+      border: 2px solid var(--accent);
+      border-radius: 16px;
+      padding: 3rem;
+      background: linear-gradient(180deg, var(--surface) 0%, #0a0a0a 100%);
+      box-shadow: 0 0 60px rgba(255, 68, 68, 0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+    }}
+    .detection-badge {{
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      background: rgba(255, 68, 68, 0.2);
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      color: var(--accent);
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      margin-bottom: 1.5rem;
     }}
     h1 {{
-      font-size: 4rem;
+      font-size: 5rem;
       margin: 0 0 1rem;
       color: var(--accent);
-      text-shadow: 0 0 20px rgba(255,68,68,0.5);
+      text-shadow: 0 0 30px rgba(255,68,68,0.6);
       letter-spacing: -0.02em;
       animation: pulse 2s ease-in-out infinite;
     }}
     @keyframes pulse {{
-      0%, 100% {{ opacity: 1; }}
-      50% {{ opacity: 0.7; }}
+      0%, 100% {{ opacity: 1; transform: scale(1); }}
+      50% {{ opacity: 0.85; transform: scale(0.98); }}
     }}
     .subtitle {{
-      font-size: 1.2rem;
+      font-size: 1.3rem;
       color: var(--muted);
       margin-bottom: 2rem;
+      line-height: 1.5;
+    }}
+    .trap-message {{
+      background: rgba(255, 68, 68, 0.1);
+      border-left: 4px solid var(--accent);
+      padding: 1rem 1.5rem;
+      margin: 2rem 0;
+      text-align: left;
+      border-radius: 0 8px 8px 0;
+    }}
+    .trap-message h3 {{
+      margin: 0 0 0.5rem;
+      color: var(--accent);
+      font-size: 1rem;
+    }}
+    .trap-message p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.9rem;
     }}
     .ua-box {{
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 1rem;
-      margin: 1rem 0;
-      font-size: 0.85rem;
+      margin: 1.5rem 0;
+      font-size: 0.8rem;
       color: #888;
       word-break: break-all;
+      text-align: left;
     }}
     .ua-box strong {{ color: var(--accent); }}
     .reasons {{
@@ -1351,40 +1553,84 @@ def render_bot_caught_page(*, session_id: str, user_agent: str = "", reasons: li
       padding: 0;
       margin: 1.5rem 0;
       text-align: left;
-      display: inline-block;
+      background: rgba(0,0,0,0.3);
+      border-radius: 8px;
+      padding: 1rem;
     }}
     .reasons li {{
-      padding: 0.5rem 0;
+      padding: 0.4rem 0;
       border-bottom: 1px solid #222;
-      color: var(--muted);
-      font-size: 0.9rem;
+      color: #999;
+      font-size: 0.85rem;
     }}
+    .reasons li:last-child {{ border-bottom: none; }}
     .reasons li::before {{
-      content: "✗ ";
+      content: "→ ";
       color: var(--accent);
     }}
+    .reasons code {{
+      background: rgba(255,68,68,0.1);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.8em;
+    }}
     .footer {{
-      margin-top: 2rem;
-      font-size: 0.8rem;
+      margin-top: 2.5rem;
+      font-size: 0.75rem;
       color: #444;
     }}
     .skull {{
-      font-size: 6rem;
+      font-size: 7rem;
       margin-bottom: 1rem;
       display: block;
+      animation: shake 3s ease-in-out infinite;
+    }}
+    @keyframes shake {{
+      0%, 100% {{ transform: rotate(0deg); }}
+      25% {{ transform: rotate(-5deg); }}
+      75% {{ transform: rotate(5deg); }}
+    }}
+    .data-poison-notice {{
+      background: linear-gradient(90deg, rgba(255,102,0,0.1), rgba(255,68,68,0.1));
+      border: 1px dashed var(--accent);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 1.5rem;
+      color: #aa8888;
+      font-size: 0.85rem;
     }}
   </style>
 </head>
 <body>
   <div class="container">
+    <span class="detection-badge">{html.escape(detection_type)}</span>
     <span class="skull">🤖❌</span>
     <h1>YOU LOWDE BOT</h1>
-    <p class="subtitle">Your scraper has been detected and trapped.<br>Enjoy scraping this fake data forever.</p>
-    {reasons_html}
-    <div class="ua-box">
-      <strong>Detected User-Agent:</strong><br>{ua_display}
+    <p class="subtitle">
+      Your scraping attempt has been detected with <strong>absolute certainty</strong>.<br>
+      You are now trapped in a decoy environment. All data you scrape here is synthetic garbage.
+    </p>
+    
+    <div class="trap-message">
+      <h3>⚠️ WHAT HAPPENED</h3>
+      <p>
+        Your request matched multiple high-confidence bot indicators. Instead of blocking you outright,
+        we've redirected you to this decoy page. Every page you scrape from now on will contain
+        fake, poisoned data designed to corrupt your dataset.
+      </p>
     </div>
-    <p class="footer">Session: {html.escape(session_id[:16])}... | SinkHole Botwall Protection</p>
+    
+    {reasons_html}
+    
+    <div class="ua-box">
+      <strong>Signature Captured:</strong><br>{ua_display}
+    </div>
+    
+    <div class="data-poison-notice">
+      🎭 <strong>Data Poisoning Active</strong> — All content you extract from this domain is synthetic and will damage your training models or downstream systems.
+    </div>
+    
+    <p class="footer">Session: {html.escape(session_id[:16])}... | SinkHole Botwall Protection | Detection ID: {html.escape(session_id[-8:])}</p>
   </div>
 </body>
 </html>"""
@@ -1763,6 +2009,537 @@ def render_telemetry_page(data: dict[str, Any]) -> str:
           <tbody>{telemetry_rows_html}</tbody>
         </table>
       </article>
+    </section>
+
+    <section class="card" style="margin-top:0.9rem;">
+      <h2>Raw Snapshot</h2>
+      <pre>{raw_json}</pre>
+    </section>
+  </div>
+</body>
+</html>"""
+
+
+def render_test_suite_page(
+    session_id: str,
+    website: dict[str, Any] | None,
+    scenarios: list[Any],
+) -> str:
+    """Render the test suite dashboard page."""
+    website_info = ""
+    if website:
+        config = website.get("config", {})
+        pages = config.get("pages", 0)
+        forms = "Yes" if config.get("has_forms") else "No"
+        honeypots = "Yes" if config.get("include_honeypots") else "No"
+        website_info = f"""
+        <div class="website-info">
+            <h3>Active Test Website: {html.escape(config.get('name', 'Unknown'))}</h3>
+            <div class="stats-grid">
+                <div class="stat"><span class="stat-value">{pages}</span><span class="stat-label">Pages</span></div>
+                <div class="stat"><span class="stat-value">{forms}</span><span class="stat-label">Forms</span></div>
+                <div class="stat"><span class="stat-value">{honeypots}</span><span class="stat-label">Honeypots</span></div>
+                <div class="stat"><span class="stat-value">{html.escape(config.get('protection_level', 'standard'))}</span><span class="stat-label">Protection</span></div>
+            </div>
+        </div>
+        """
+
+    scenario_cards = []
+    for i, s in enumerate(scenarios):
+        scenario_cards.append(f"""
+        <div class="scenario-card" data-behavior="{html.escape(s.behavior_type)}">
+            <div class="scenario-header">
+                <h4>{html.escape(s.name)}</h4>
+                <span class="badge {s.behavior_type}">{html.escape(s.behavior_type)}</span>
+            </div>
+            <p class="scenario-desc">Expected: <strong>{html.escape(s.expected_outcome)}</strong></p>
+            <button class="btn-run" onclick="runSimulation({i}, '{html.escape(s.behavior_type)}')">Run Simulation</button>
+        </div>
+        """)
+
+    scenarios_html = "".join(scenario_cards)
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Botwall Test Suite</title>
+  <style>
+    :root {{
+      --bg: #0f1117;
+      --surface: #171c28;
+      --surface-2: #1c2434;
+      --border: #2a3348;
+      --text: #d9e3f0;
+      --muted: #7f8ba5;
+      --accent: #4dd0e1;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --risk: #ef4444;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      margin: 0;
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      padding: 1.5rem;
+    }}
+    .wrap {{ max-width: 1200px; margin: 0 auto; }}
+    h1 {{ margin: 0 0 0.5rem; font-size: 1.8rem; }}
+    h2 {{ margin: 1.5rem 0 0.75rem; font-size: 1.3rem; }}
+    h3 {{ margin: 1rem 0 0.5rem; font-size: 1.1rem; color: var(--accent); }}
+    .sub {{ margin: 0 0 1.5rem; color: var(--muted); }}
+    .website-info {{
+      background: linear-gradient(180deg, var(--surface), var(--surface-2));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }}
+    .stats-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }}
+    .stat {{
+      text-align: center;
+      padding: 0.75rem;
+      background: var(--surface-2);
+      border-radius: 8px;
+    }}
+    .stat-value {{
+      display: block;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--accent);
+    }}
+    .stat-label {{
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+    }}
+    .scenarios-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1rem;
+    }}
+    .scenario-card {{
+      background: linear-gradient(180deg, var(--surface), var(--surface-2));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      transition: transform 0.2s, border-color 0.2s;
+    }}
+    .scenario-card:hover {{
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }}
+    .scenario-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }}
+    .scenario-header h4 {{ margin: 0; font-size: 1rem; }}
+    .badge {{
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }}
+    .badge.human {{ background: rgba(34, 197, 94, 0.2); color: var(--ok); }}
+    .badge.bot_basic, .badge.bot_advanced {{
+      background: rgba(239, 68, 68, 0.2); color: var(--risk);
+    }}
+    .scenario-desc {{
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }}
+    .btn-run {{
+      width: 100%;
+      padding: 0.6rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #04202a;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }}
+    .btn-run:hover {{ opacity: 0.9; }}
+    .btn-run:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+    .result-panel {{
+      margin-top: 1.5rem;
+      padding: 1rem;
+      background: var(--surface-2);
+      border-radius: 8px;
+      border-left: 3px solid var(--accent);
+      display: none;
+    }}
+    .result-panel.visible {{ display: block; }}
+    .api-section {{
+      margin-top: 2rem;
+      padding: 1.25rem;
+      background: var(--surface);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }}
+    .api-section h3 {{ margin-top: 0; }}
+    .api-list {{
+      list-style: none;
+      margin-top: 0.75rem;
+    }}
+    .api-list li {{
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+    }}
+    .api-list li:last-child {{ border-bottom: none; }}
+    .method {{
+      display: inline-block;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }}
+    .method.get {{ background: rgba(77, 208, 225, 0.2); color: var(--accent); }}
+    .method.post {{ background: rgba(34, 197, 94, 0.2); color: var(--ok); }}
+    code {{
+      background: rgba(0,0,0,0.3);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }}
+    pre {{
+      background: rgba(0,0,0,0.3);
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      margin-top: 0.5rem;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Botwall Test Suite</h1>
+    <p class="sub">Stage 2 Phase 2 Testing Environment — Simulate bot and human behaviors</p>
+
+    {website_info}
+
+    <h2>Test Scenarios</h2>
+    <div class="scenarios-grid">
+      {scenarios_html}
+    </div>
+
+    <div class="result-panel" id="resultPanel">
+      <h4>Simulation Results</h4>
+      <pre id="resultOutput">Click "Run Simulation" to see results...</pre>
+    </div>
+
+    <section class="api-section">
+      <h3>Test Suite API Endpoints</h3>
+      <ul class="api-list">
+        <li><span class="method get">GET</span> <code>/bw/test-suite/config</code> — Get default configuration</li>
+        <li><span class="method post">POST</span> <code>/bw/test-suite/build</code> — Build custom test website</li>
+        <li><span class="method post">POST</span> <code>/bw/test-suite/simulate</code> — Run behavior simulation</li>
+        <li><span class="method get">GET</span> <code>/bw/test-suite/behavior-types</code> — List behavior types</li>
+      </ul>
+    </section>
+  </div>
+
+  <script>
+    const SESSION_ID = {json.dumps(session_id)};
+
+    async function runSimulation(scenarioIdx, behaviorType) {{
+      const panel = document.getElementById('resultPanel');
+      const output = document.getElementById('resultOutput');
+      panel.classList.add('visible');
+      output.textContent = 'Running simulation...';
+
+      try {{
+        const res = await fetch('/bw/test-suite/simulate', {{
+          method: 'POST',
+          headers: {{ 'content-type': 'application/json' }},
+          body: JSON.stringify({{ behavior_type: behaviorType }}),
+        }});
+        const data = await res.json();
+        output.textContent = JSON.stringify(data, null, 2);
+      }} catch (err) {{
+        output.textContent = 'Error: ' + err.message;
+      }}
+    }}
+  </script>
+</body>
+</html>"""
+
+
+def render_enhanced_telemetry_page(data: dict[str, Any]) -> str:
+    """Render the enhanced telemetry page with Phase 2 data."""
+    metrics = data.get("metrics", {})
+    sessions = data.get("sessions", [])
+    telemetry = data.get("telemetry", [])
+    phase2 = metrics.get("phase2", {})
+
+    m_sessions = int(metrics.get("sessions_total", 0))
+    m_gate = int(metrics.get("gate_passed", 0))
+    m_proof = int(metrics.get("proof_sessions", 0))
+    m_decoy = int(metrics.get("decoy_sessions", 0))
+    m_allow = int(metrics.get("allow_sessions", 0))
+    m_avg = float(metrics.get("avg_score", 0.0))
+
+    # Phase 2 metrics
+    p2_mouse_teleport = int(phase2.get("mouse_teleport_detected", 0))
+    p2_instant_scroll = int(phase2.get("instant_scroll_detected", 0))
+    p2_honeypot = int(phase2.get("honeypot_interactions", 0))
+    p2_timing = int(phase2.get("timing_trap_triggers", 0))
+    p2_robotic = int(phase2.get("robotic_typing", 0))
+    p2_sessions = int(phase2.get("sessions_with_phase2_data", 0))
+
+    session_rows = []
+    for s in sessions[:80]:
+        sid = html.escape(str(s.get("session_id", ""))[:16])
+        score = float(s.get("score", 0.0))
+        gate_diff = s.get("gate_difficulty", "-")
+        env_score = s.get("gate_env_score", "-")
+        proof_valid = int(s.get("proof_valid", 0))
+        challenges = int(s.get("challenge_issued", 0))
+        traversal_ok = int(s.get("traversal_valid", 0))
+        traversal_bad = int(s.get("traversal_invalid", 0))
+        history = s.get("decision_history", [])
+        latest = "-"
+        if history:
+            latest = str(history[-1].get("decision", "-"))
+        cls = "ok" if latest == "allow" else "warn" if latest in {{"observe", "challenge"}} else "risk"
+
+        # Check for Phase 2 risk flags
+        risk_indicators = ""
+        events = s.get("events", [])
+        for e in events:
+            p2 = e.get("phase2_data", {{}})
+            if p2:
+                flags = []
+                if p2.get("mouse_teleport_count", 0) > 0:
+                    flags.append("TP")
+                if p2.get("instant_scroll_detected"):
+                    flags.append("IS")
+                if p2.get("honeypot_hits"):
+                    flags.append("HP")
+                if flags:
+                    risk_indicators = "<span class='risk-badge'>" + ",".join(flags) + "</span>"
+                    break
+
+        session_rows.append(
+            f"<tr>"
+            f"<td>{sid}</td><td>{score:.1f}</td><td>{gate_diff}</td><td>{env_score}</td>"
+            f"<td>{proof_valid}</td><td>{challenges}</td><td>{traversal_ok}/{traversal_bad}</td>"
+            f"<td class='{{cls}}'>{html.escape(latest)}</td>"
+            f"<td>{risk_indicators}</td></tr>"
+        )
+    session_rows_html = "".join(session_rows) or "<tr><td colspan='9'>No sessions yet</td></tr>"
+
+    telemetry_rows = []
+    for t in telemetry[-120:][::-1]:
+        fp = html.escape(str(t.get("fingerprint", ""))[:20])
+        susp = float(t.get("suspicion", 0.0))
+        src = html.escape(str(t.get("source", "local")))
+        obs = int(t.get("observed_at", 0) or 0)
+        cls = "risk" if susp >= 20 else "warn" if susp >= 8 else "ok"
+        telemetry_rows.append(f"<tr><td>{fp}</td><td class='{{cls}}'>{susp:.1f}</td><td>{src}</td><td>{obs}</td></tr>")
+    telemetry_rows_html = "".join(telemetry_rows) or "<tr><td colspan='4'>No telemetry samples yet</td></tr>"
+
+    raw_json = html.escape(json.dumps(data, indent=2, sort_keys=True))
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SinkHole Enhanced Telemetry — Stage 2 Phase 2</title>
+  <style>
+    :root {{
+      --bg: #0f1117;
+      --surface: #171c28;
+      --surface-2: #1c2434;
+      --border: #2a3348;
+      --text: #d9e3f0;
+      --muted: #7f8ba5;
+      --accent: #4dd0e1;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --risk: #ef4444;
+      --phase2: #a78bfa;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1200px 400px at 20% -10%, #26324d 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100dvh;
+      padding: 1rem;
+    }}
+    .wrap {{ max-width: 1400px; margin: 0 auto; }}
+    h1 {{ margin: 0 0 0.35rem; font-size: 1.5rem; }}
+    .sub {{ margin: 0 0 1rem; color: var(--muted); }}
+    .badge {{
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: var(--phase2);
+      color: white;
+      margin-left: 0.5rem;
+    }}
+    .kpis {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }}
+    .kpi {{
+      background: linear-gradient(180deg, var(--surface), var(--surface-2));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.8rem;
+      animation: rise 300ms ease;
+    }}
+    .kpi .v {{ font-size: 1.35rem; font-weight: 700; }}
+    .kpi .l {{ color: var(--muted); font-size: 0.82rem; }}
+    .kpi.phase2 {{ border-color: var(--phase2); }}
+    .kpi.phase2 .v {{ color: var(--phase2); }}
+    .phase2-section {{
+      background: linear-gradient(180deg, rgba(167, 139, 250, 0.1), var(--surface));
+      border: 1px solid var(--phase2);
+      border-radius: 12px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }}
+    .phase2-section h2 {{
+      color: var(--phase2);
+      margin: 0 0 0.75rem;
+      font-size: 1.1rem;
+    }}
+    .grid {{ display: grid; grid-template-columns: 2fr 1fr; gap: 0.9rem; }}
+    .card {{
+      background: linear-gradient(180deg, var(--surface), var(--surface-2));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem;
+    }}
+    .card h2 {{ margin: 0 0 0.6rem; font-size: 1rem; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
+    th, td {{ border-bottom: 1px solid #273147; padding: 0.45rem; text-align: left; }}
+    th {{ color: var(--muted); font-weight: 600; }}
+    .ok {{ color: var(--ok); }}
+    .warn {{ color: var(--warn); }}
+    .risk {{ color: var(--risk); }}
+    .risk-badge {{
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--risk);
+      padding: 0.15rem 0.3rem;
+      border-radius: 3px;
+      font-size: 0.7rem;
+    }}
+    pre {{
+      margin: 0;
+      max-height: 360px;
+      overflow: auto;
+      background: #0f1420;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem;
+      color: #c7d3e7;
+      font-size: 0.74rem;
+      line-height: 1.45;
+    }}
+    .tabs {{
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }}
+    .tab {{
+      padding: 0.5rem 1rem;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.9rem;
+    }}
+    .tab.active {{
+      color: var(--accent);
+      border-bottom: 2px solid var(--accent);
+    }}
+    @media (max-width: 980px) {{ .grid {{ grid-template-columns: 1fr; }} }}
+    @keyframes rise {{ from {{ transform: translateY(4px); opacity: 0.6; }} to {{ transform: translateY(0); opacity: 1; }} }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>SinkHole Enhanced Telemetry <span class="badge">STAGE 2 PHASE 2</span></h1>
+    <p class="sub">Advanced behavioral detection with mouse patterns, keystroke dynamics, scroll analysis, and trap detection.</p>
+
+    <section class="kpis">
+      <div class="kpi"><div class="v">{m_sessions}</div><div class="l">Sessions</div></div>
+      <div class="kpi"><div class="v">{m_gate}</div><div class="l">Gate Passed</div></div>
+      <div class="kpi"><div class="v">{m_proof}</div><div class="l">Proof Valid</div></div>
+      <div class="kpi"><div class="v">{m_allow}</div><div class="l">Allow Decisions</div></div>
+      <div class="kpi"><div class="v">{m_decoy}</div><div class="l">Decoy Decisions</div></div>
+      <div class="kpi"><div class="v">{m_avg:.1f}</div><div class="l">Avg Score</div></div>
+    </section>
+
+    <section class="phase2-section">
+      <h2>Phase 2 Behavioral Detection Metrics</h2>
+      <div class="kpis">
+        <div class="kpi phase2"><div class="v">{p2_mouse_teleport}</div><div class="l">Mouse Teleports</div></div>
+        <div class="kpi phase2"><div class="v">{p2_instant_scroll}</div><div class="l">Instant Scrolls</div></div>
+        <div class="kpi phase2"><div class="v">{p2_honeypot}</div><div class="l">Honeypot Hits</div></div>
+        <div class="kpi phase2"><div class="v">{p2_timing}</div><div class="l">Timing Traps</div></div>
+        <div class="kpi phase2"><div class="v">{p2_robotic}</div><div class="l">Robotic Typing</div></div>
+        <div class="kpi phase2"><div class="v">{p2_sessions}</div><div class="l">Sessions w/ P2 Data</div></div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Session Timeline with Phase 2 Risk Flags</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Session</th><th>Score</th><th>Gate</th><th>Env</th>
+              <th>Proof</th><th>Challenges</th><th>Traversal</th><th>Latest</th><th>P2 Flags</th>
+            </tr>
+          </thead>
+          <tbody>{session_rows_html}</tbody>
+        </table>
+      </article>
+
+      <article class="card">
+        <h2>Telemetry Fingerprints</h2>
+        <table>
+          <thead><tr><th>Fingerprint</th><th>Suspicion</th><th>Source</th><th>Observed</th></tr></thead>
+          <tbody>{telemetry_rows_html}</tbody>
+        </table>
+      </article>
+    </section>
+
+    <section class="card" style="margin-top:0.9rem;">
+      <h2>API Endpoints</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin: 0.5rem 0 1rem;">
+        <strong>GET</strong> <code>/bw/telemetry/v2</code> — Enhanced telemetry with Phase 2 data<br>
+        <strong>GET</strong> <code>/bw/telemetry/sessions/&#123;id&#125;/behavioral</code> — Session behavioral analysis<br>
+        <strong>GET</strong> <code>/bw/telemetry/attack-patterns</code> — Detected attack patterns summary
+      </p>
     </section>
 
     <section class="card" style="margin-top:0.9rem;">

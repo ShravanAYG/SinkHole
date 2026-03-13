@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import urllib.parse
 import uuid
 from typing import Any
@@ -12,7 +13,20 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
-from .html import render_challenge_page, render_dashboard, render_decoy_page, render_gate_blocked_page, render_gate_challenge_page, render_origin_page, render_recovery_page, render_telemetry_page, render_bot_caught_page, sdk_script
+from .html import (
+    render_challenge_page,
+    render_dashboard,
+    render_decoy_page,
+    render_gate_blocked_page,
+    render_gate_challenge_page,
+    render_origin_page,
+    render_recovery_page,
+    render_telemetry_page,
+    render_bot_caught_page,
+    render_test_suite_page,
+    render_enhanced_telemetry_page,
+    sdk_script,
+)
 from .models import (
     BeaconEvent,
     CheckResponse,
@@ -99,34 +113,90 @@ def _explicit_scraper_reasons(request: Request) -> list[str]:
     accept = request.headers.get("accept", "").lower().strip()
     accept_language = request.headers.get("accept-language", "").strip()
     ip_reputation = request.headers.get("x-ip-reputation", "unknown").lower().strip()
-
-    markers = [
-        "curl",
-        "wget",
-        "python-requests",
-        "python-urllib",
-        "httpx",
-        "aiohttp",
-        "go-http-client",
-        "libwww-perl",
-        "scrapy",
-        "headless",
+    
+    # Advanced crawler service detection (Firecrawl, etc.)
+    # These services often have subtle signatures even with stealth browsers
+    advanced_markers = [
+        # Firecrawl specific patterns
+        "firecrawl",
+        "fire-crawl",
+        "fire_crawl",
+        # Common scraping services
+        "scrape",
+        "crawler",
+        "spider",
+        # Browser automation platforms
+        "browserless",
         "puppeteer",
         "playwright",
         "selenium",
+        "webdriver",
+        "headlesschrome",
+        "headless-chrome",
+        # Cloud scraping services
+        "scrapingbee",
+        "scraperapi",
+        "zenrows",
+        "brightdata",
+        "oxylabs",
+        "smartproxy",
     ]
+    
+    # Check for header anomalies that indicate automation
+    # Real browsers send detailed Accept headers
+    accept_suspicious = accept in {"", "*/*", "text/html", "text/html, */*"}
+    
+    # Check for missing or generic headers that browsers always send
+    dnt = request.headers.get("dnt")  # Do Not Track
+    sec_fetch_site = request.headers.get("sec-fetch-site")
+    sec_fetch_mode = request.headers.get("sec-fetch-mode")
+    
+    # Missing Sec-Fetch-* headers is a strong automation signal (modern browsers always send these)
+    missing_sec_fetch = not sec_fetch_site and not sec_fetch_mode
+    
+    # Check encoding preferences - real browsers always accept compressed responses
+    accept_encoding = request.headers.get("accept-encoding", "")
+    no_compression = not accept_encoding or "identity" in accept_encoding
+    
     reasons: list[str] = []
-    match = next((marker for marker in markers if marker in ua), None)
-    if not match:
-        return reasons
-
-    reasons.append(f"pregate:explicit_scraper_ua:{match}")
-    if not accept_language:
-        reasons.append("pregate:missing_accept_language")
-    if accept in {"", "*/*"}:
-        reasons.append("pregate:generic_accept_header")
-    if ip_reputation == "bad":
-        reasons.append("pregate:ip_reputation_bad")
+    
+    # Check for explicit scraper markers in User-Agent
+    for marker in advanced_markers:
+        if marker in ua:
+            reasons.append(f"pregate:explicit_scraper_ua:{marker}")
+            break
+    
+    # Check for Firecrawl-specific patterns in other headers
+    # Firecrawl sometimes uses specific proxy headers
+    via_header = request.headers.get("via", "").lower()
+    if "firecrawl" in via_header or "crawl" in via_header:
+        reasons.append("pregate:via_header_crawler")
+    
+    # Check for proxy service headers
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        # Multiple IPs in X-Forwarded-For often indicates proxy chaining (common in scraping services)
+        if forwarded_for.count(",") >= 2:
+            reasons.append("pregate:proxy_chain_detected")
+    
+    # CF-Connecting-IP or similar CDN headers without proper browser signals
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip and missing_sec_fetch:
+        reasons.append("pregate:cdn_ip_without_browser_signals")
+    
+    # If we've found scraper markers, add supporting evidence
+    if reasons:
+        if not accept_language:
+            reasons.append("pregate:missing_accept_language")
+        if accept_suspicious:
+            reasons.append("pregate:generic_accept_header")
+        if ip_reputation == "bad":
+            reasons.append("pregate:ip_reputation_bad")
+        if missing_sec_fetch:
+            reasons.append("pregate:missing_sec_fetch_headers")
+        if no_compression:
+            reasons.append("pregate:no_compression_support")
+            
     return reasons
 
 
@@ -225,6 +295,84 @@ def _build_operator_telemetry_snapshot(store: StoreManager) -> dict[str, Any]:
         "metrics": metrics,
         "sessions": sessions,
         "telemetry": telemetry,
+    }
+
+
+def _build_enhanced_telemetry_snapshot(store: StoreManager) -> dict[str, Any]:
+    """Build enhanced telemetry with Phase 2 behavioral data."""
+    sessions = store.store.list_sessions(limit=300)
+    telemetry = store.store.list_telemetry(limit=300)
+
+    gate_passed = 0
+    proof_sessions = 0
+    decoy_sessions = 0
+    allow_sessions = 0
+    total_score = 0.0
+
+    # Phase 2 metrics
+    phase2_metrics = {
+        "mouse_teleport_detected": 0,
+        "instant_scroll_detected": 0,
+        "honeypot_interactions": 0,
+        "timing_trap_triggers": 0,
+        "robotic_typing": 0,
+        "sessions_with_phase2_data": 0,
+    }
+
+    for s in sessions:
+        total_score += float(s.get("score", 0.0))
+        if s.get("gate_passed_at"):
+            gate_passed += 1
+        if int(s.get("proof_valid", 0)) > 0:
+            proof_sessions += 1
+
+        history = s.get("decision_history", [])
+        if history:
+            latest = str(history[-1].get("decision", ""))
+            if latest == "decoy":
+                decoy_sessions += 1
+            if latest == "allow":
+                allow_sessions += 1
+
+        # Analyze Phase 2 data
+        events = s.get("events", [])
+        has_phase2 = False
+        for e in events:
+            p2 = e.get("phase2_data", {})
+            if p2:
+                has_phase2 = True
+                if p2.get("mouse_teleport_count", 0) > 0:
+                    phase2_metrics["mouse_teleport_detected"] += 1
+                if p2.get("instant_scroll_detected"):
+                    phase2_metrics["instant_scroll_detected"] += 1
+                if p2.get("honeypot_hits"):
+                    phase2_metrics["honeypot_interactions"] += len(p2["honeypot_hits"])
+                if p2.get("timing_traps"):
+                    phase2_metrics["timing_trap_triggers"] += sum(
+                        1 for t in p2["timing_traps"] if t.get("triggered")
+                    )
+                if p2.get("keystroke_dwell_cv", 0) < 0.05 and p2.get("keystrokes"):
+                    phase2_metrics["robotic_typing"] += 1
+
+        if has_phase2:
+            phase2_metrics["sessions_with_phase2_data"] += 1
+
+    metrics = {
+        "sessions_total": len(sessions),
+        "gate_passed": gate_passed,
+        "proof_sessions": proof_sessions,
+        "decoy_sessions": decoy_sessions,
+        "allow_sessions": allow_sessions,
+        "avg_score": (total_score / len(sessions)) if sessions else 0.0,
+        "phase2": phase2_metrics,
+    }
+
+    return {
+        "store_backend": store.backend,
+        "metrics": metrics,
+        "sessions": sessions,
+        "telemetry": telemetry,
+        "generated_at": now_ts(),
     }
 
 
@@ -404,8 +552,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ua = request.headers.get("user-agent", "")
         env_score, env_reasons, hard_fail = score_gate_environment(env_dict, request_user_agent=ua)
 
-        # 3. Hard fail: issue elevated challenge page as 403 HTML
+        # 3. Hard fail: redirect to bot-caught page immediately
         if hard_fail:
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).extend(env_reasons)
+            _record_decision(session, "decoy", env_reasons)
+            store.store.save_session(session)
+            
+            # Redirect to bot-caught page with absolute clarity
+            response = RedirectResponse(url=f"/bw/bot-caught?sid={session_id}", status_code=302)
+            response.headers["x-botwall-decision"] = "bot_caught"
+            response.headers["x-botwall-reasons"] = ",".join(env_reasons[-6:])
+            _attach_cookie(response, cfg, session_id)
+            return response
+        
+        # 3b. Elevated suspicion: also block with elevated challenge
+        if env_score <= -50:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
             store.store.save_session(session)
             elevated = issue_pow_challenge(
@@ -947,6 +1110,250 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = HTMLResponse(page)
         response.headers["x-botwall-decision"] = decision
         response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    # ── Test Suite & Development Routes ────────────────────────────────────────
+
+    @app.get("/bw/test-suite")
+    async def bw_test_suite(request: Request) -> HTMLResponse:
+        """Test suite dashboard for running bot/human simulations."""
+        session_id = _get_session_id(request, cfg)
+        suite = create_demo_test_suite()
+        website = suite.websites[0] if suite.websites else None
+        scenarios = suite.generate_default_scenarios()
+        response = HTMLResponse(render_test_suite_page(
+            session_id=session_id,
+            website=website,
+            scenarios=scenarios,
+        ))
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/bw/test-suite/config")
+    async def bw_test_suite_config() -> JSONResponse:
+        """Get default test suite configuration."""
+        config = TestWebsiteConfig(
+            name="Demo Test Site",
+            pages=7,
+            has_forms=True,
+            has_search=True,
+            protection_level="maximum",
+            include_honeypots=True,
+            include_timing_traps=True,
+        )
+        return JSONResponse(config.__dict__)
+
+    @app.post("/bw/test-suite/build")
+    async def bw_test_suite_build(request: Request) -> JSONResponse:
+        """Build a test website with specified configuration."""
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            data = {}
+
+        config = TestWebsiteConfig(
+            name=data.get("name", "Test Site"),
+            pages=data.get("pages", 5),
+            has_forms=data.get("has_forms", True),
+            has_search=data.get("has_search", True),
+            protection_level=data.get("protection_level", "standard"),
+            include_honeypots=data.get("include_honeypots", True),
+            include_timing_traps=data.get("include_timing_traps", True),
+        )
+
+        builder = TestWebsiteBuilder(config)
+        website = builder.build()
+
+        return JSONResponse({
+            "ok": True,
+            "website": website,
+        })
+
+    @app.post("/bw/test-suite/simulate")
+    async def bw_test_suite_simulate(request: Request) -> JSONResponse:
+        """Run a behavior simulation and return results."""
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            data = {}
+
+        behavior_type = data.get("behavior_type", "human")
+        simulator = BehaviorSimulator()
+
+        # Generate simulated data based on behavior type
+        results = {
+            "behavior_type": behavior_type,
+            "mouse_path": [],
+            "keystrokes": [],
+            "scroll_events": [],
+            "dwell_ms": 0,
+        }
+
+        if behavior_type == "human":
+            # Human-like mouse path
+            start = (100.0, 100.0)
+            end = (500.0, 400.0)
+            results["mouse_path"] = [
+                {"x": p["x"], "y": p["y"], "t": p["t"]}
+                for p in simulator.simulate_human_mouse_path(start, end)
+            ]
+            # Human-like keystrokes
+            text = "Hello, this is a test message."
+            results["keystrokes"] = [
+                {"char": k["char"], "press_time": k["press_time"], "release_time": k["release_time"], "dwell": k["dwell"]}
+                for k in simulator.simulate_human_keystrokes(text)
+            ]
+            # Human-like scroll
+            results["scroll_events"] = [
+                {"y": s["y"], "t": s["t"], "delta": s["delta"]}
+                for s in simulator.simulate_human_scroll()
+            ]
+            results["dwell_ms"] = random.randint(3000, 8000)
+
+        elif behavior_type == "bot_basic":
+            # Bot-like mouse path
+            start = (100.0, 100.0)
+            end = (500.0, 400.0)
+            results["mouse_path"] = [
+                {"x": p["x"], "y": p["y"], "t": p["t"]}
+                for p in simulator.simulate_bot_mouse_path(start, end)
+            ]
+            # Bot-like keystrokes
+            text = "Hello bot message here."
+            results["keystrokes"] = [
+                {"char": k["char"], "press_time": k["press_time"], "release_time": k["release_time"], "dwell": k["dwell"]}
+                for k in simulator.simulate_bot_keystrokes(text)
+            ]
+            # Bot-like scroll (instant)
+            results["scroll_events"] = [
+                {"y": s["y"], "t": s["t"], "delta": s["delta"]}
+                for s in simulator.simulate_bot_scroll()
+            ]
+            results["dwell_ms"] = random.randint(200, 500)
+
+        return JSONResponse({
+            "ok": True,
+            "simulation": results,
+        })
+
+    @app.get("/bw/test-suite/behavior-types")
+    async def bw_test_suite_behavior_types() -> JSONResponse:
+        """List available behavior simulation types."""
+        return JSONResponse({
+            "types": [
+                {
+                    "id": "human",
+                    "name": "Human User",
+                    "description": "Natural mouse curves, variable keystroke timing, realistic scroll patterns",
+                },
+                {
+                    "id": "bot_basic",
+                    "name": "Basic Bot",
+                    "description": "Straight mouse lines, instant keystrokes, instant scroll jumps",
+                },
+                {
+                    "id": "bot_advanced",
+                    "name": "Advanced Bot",
+                    "description": "Simulated mouse movement with constant velocity",
+                },
+            ]
+        })
+
+    # ── Enhanced Telemetry Routes ────────────────────────────────────────────
+
+    @app.get("/bw/telemetry/v2")
+    async def bw_telemetry_v2(request: Request) -> HTMLResponse:
+        """Enhanced telemetry console with Phase 2 behavioral data."""
+        session_id = _get_session_id(request, cfg)
+        snapshot = _build_enhanced_telemetry_snapshot(store)
+        response = HTMLResponse(render_enhanced_telemetry_page(snapshot))
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/bw/telemetry/sessions/{session_id}/behavioral")
+    async def bw_session_behavioral(session_id: str) -> JSONResponse:
+        """Get detailed behavioral analysis for a specific session."""
+        sessions = store.store.list_sessions(limit=500)
+        session = next((s for s in sessions if s.get("session_id") == session_id), None)
+
+        if not session:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        # Extract Phase 2 data from events
+        phase2_analysis = {
+            "mouse_patterns": [],
+            "keystroke_dynamics": [],
+            "scroll_patterns": [],
+            "engagement_metrics": [],
+            "trap_interactions": [],
+            "risk_flags": [],
+        }
+
+        events = session.get("events", [])
+        for event in events:
+            phase2_data = event.get("phase2_data")
+            if phase2_data:
+                if phase2_data.get("mouse_teleport_count", 0) > 0:
+                    phase2_analysis["risk_flags"].append("MOUSE_TELEPORT")
+                if phase2_data.get("instant_scroll_detected"):
+                    phase2_analysis["risk_flags"].append("INSTANT_SCROLL")
+                if phase2_data.get("likely_copy_paste"):
+                    phase2_analysis["risk_flags"].append("COPY_PASTE")
+
+        return JSONResponse({
+            "session_id": session_id,
+            "score": session.get("score", 0.0),
+            "events_count": len(events),
+            "phase2_analysis": phase2_analysis,
+        })
+
+    @app.get("/bw/telemetry/attack-patterns")
+    async def bw_attack_patterns() -> JSONResponse:
+        """Detect and report attack patterns across sessions."""
+        sessions = store.store.list_sessions(limit=500)
+        telemetry = store.store.list_telemetry(limit=200)
+
+        patterns = {
+            "mouse_teleport_bots": 0,
+            "instant_scrollers": 0,
+            "honeypot_hits": 0,
+            "timing_trap_triggers": 0,
+            "robotic_typing": 0,
+            "suspicious_fingerprints": 0,
+        }
+
+        for s in sessions:
+            events = s.get("events", [])
+            for e in events:
+                p2 = e.get("phase2_data", {})
+                if p2.get("mouse_teleport_count", 0) > 0:
+                    patterns["mouse_teleport_bots"] += 1
+                if p2.get("instant_scroll_detected"):
+                    patterns["instant_scrollers"] += 1
+                if p2.get("honeypot_hits"):
+                    patterns["honeypot_hits"] += len(p2["honeypot_hits"])
+
+        for t in telemetry:
+            if t.get("suspicion", 0) > 20:
+                patterns["suspicious_fingerprints"] += 1
+
+        return JSONResponse({
+            "patterns": patterns,
+            "total_sessions_analyzed": len(sessions),
+            "high_risk_sessions": sum(1 for s in sessions if s.get("score", 0) < -50),
+        })
+
+    @app.get("/bw/stage2")
+    async def bw_stage2_dashboard(request: Request) -> HTMLResponse:
+        """Comprehensive Stage 2 behavioral analysis dashboard."""
+        session_id = _get_session_id(request, cfg)
+        snapshot = _build_enhanced_telemetry_snapshot(store)
+        # Add phase2_analysis for the dashboard
+        snapshot["phase2_analysis"] = {}
+        response = HTMLResponse(render_enhanced_telemetry_page(snapshot))
         _attach_cookie(response, cfg, session_id)
         return response
 
