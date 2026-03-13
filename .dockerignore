@@ -8,7 +8,8 @@ env/
 venv/
 .pytest_cache/
 tests/
-scripts/
+scripts/*
+!scripts/demo_origin_site.py
 .git/
 .github/
 .gitignore

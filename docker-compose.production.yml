@@ -1,53 +1,68 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# SinkHole + Your Website — Run Both on the Same Server
+# SinkHole Production — hacksinkhole.duckdns.org (65.1.166.8)
 #
-# Usage:
-#   1. Replace "your-website-image:latest" with YOUR Docker image
-#   2. Set the correct port your app listens on
-#   3. Run: docker compose -f docker-compose.production.yml up -d --build
+# Runs everything on one server:
+#   - Nginx (port 80) — edge proxy
+#   - Botwall (port 4000) — bot detection + content poisoning
+#   - Origin (port 9000) — your demo website
 #
-# This runs both SinkHole and your website on a single AWS server.
-# SinkHole intercepts all traffic on port 80, protects your website.
+# Deploy:
+#   docker compose -f docker-compose.production.yml up -d --build
+#
+# ─── TO USE WITH ANY OTHER WEBSITE ───────────────────────────────────────
+#
+# Option A: Replace the "origin" service below with your website's Docker image
+#           and update ORIGIN_PORT to match your app's port.
+#
+# Option B: Use the standalone all-in-one image (no compose needed):
+#
+#   docker run -p 80:80 \
+#     -e UPSTREAM_URL=https://my-website.com \
+#     -e BOTWALL_SECRET_KEY=$(openssl rand -hex 32) \
+#     sinkhole:latest
+#
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  # ── SinkHole: Bot Detection + Content Poisoning Gateway ─────────────────
-  sinkhole:
-    build: .
+  # ── Nginx: Edge proxy, port 80 ──────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
     ports:
-      - "80:80"           # All traffic enters here
-    environment:
-      - UPSTREAM_URL=http://website:3000   # Points to your website container below
-      - BOTWALL_SECRET_KEY=${BOTWALL_SECRET_KEY:-change-me}
-      - BOTWALL_TELEMETRY_SECRET=${BOTWALL_TELEMETRY_SECRET:-change-me}
+      - "80:80"
+    volumes:
+      - ./deploy/nginx-production.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - website
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
+      - botwall
+      - origin
     restart: unless-stopped
 
-  # ── Your Website ───────────────────────────────────────────────────────
-  # Replace this with YOUR application
-  website:
-    image: your-website-image:latest       # ← YOUR IMAGE HERE
-    # build: /path/to/your/website         # ← Or build from source
+  # ── Botwall: Bot detection + content poisoning engine ───────────────────
+  botwall:
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+    environment:
+      - BOTWALL_HOST=0.0.0.0
+      - BOTWALL_PORT=4000
+      - BOTWALL_SECRET_KEY=${BOTWALL_SECRET_KEY:-change-me-in-production}
+      - BOTWALL_TELEMETRY_SECRET=${BOTWALL_TELEMETRY_SECRET:-change-me-in-production}
+      - BOTWALL_POW_DIFFICULTY=2
+      - BOTWALL_POW_ELEVATED_DIFFICULTY=3
+      # - BOTWALL_REDIS_ENABLED=1
+      # - BOTWALL_REDIS_URL=redis://redis:6379/0
     expose:
-      - "3000"                             # ← YOUR APP'S PORT (not exposed to internet)
-    # environment:
-    #   - DATABASE_URL=postgres://...      # ← Your app's env vars
+      - "4000"
     restart: unless-stopped
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Traffic flow:
-#
-#   Internet:80 → SinkHole (Nginx + Botwall)
-#                   ├── Human? → website:3000 (your real app)
-#                   └── Bot?   → Poisoned content (same URL, fake data)
-#
-# Your website is NOT exposed to the internet directly.
-# Only SinkHole's port 80 is public.
-# ─────────────────────────────────────────────────────────────────────────────
+  # ── Origin: Your website ────────────────────────────────────────────────
+  origin:
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+    command: python scripts/demo_origin_site.py
+    environment:
+      - ORIGIN_HOST=0.0.0.0
+      - ORIGIN_PORT=9000
+    expose:
+      - "9000"
+    restart: unless-stopped
