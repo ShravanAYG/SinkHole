@@ -145,6 +145,8 @@ def _redirect_explicit_scraper_to_decoy(
     client_ip = _client_ip(request)
     ip_hash = hash_client_ip(client_ip, settings.secret_key)
     session = store.store.load_session(session_id, ip_hash)
+    if int(session.get("allow_until", 0)) > now_ts():
+        return None
     session["score"] = min(float(session.get("score", 0.0)), settings.decoy_threshold - 5.0)
     session.setdefault("reasons", []).extend(reasons)
     _record_decision(session, "decoy", reasons)
@@ -764,6 +766,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         result = RecoveryCompleteResponse(decision="allow", allow_until=int(session["allow_until"]))
         response = JSONResponse(result.model_dump(mode="json"), status_code=202)
+        gate_token = issue_gate_token(
+            secret=cfg.secret_key,
+            session_id=session_id,
+            ip_hash=ip_hash,
+            solved_difficulty=int(session.get("gate_difficulty", cfg.pow_default_difficulty)),
+            env_score=int(session.get("gate_env_score", 0)),
+            ttl_seconds=cfg.gate_ttl_seconds,
+        )
+        response.set_cookie(
+            key=cfg.gate_cookie,
+            value=gate_token,
+            httponly=True,
+            samesite="lax",
+            max_age=cfg.gate_ttl_seconds,
+            path="/",
+        )
         _attach_cookie(response, cfg, session_id)
         return response
 

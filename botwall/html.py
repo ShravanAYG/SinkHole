@@ -209,35 +209,17 @@ def render_gate_challenge_page(
     difficulty: int,
     return_to: str,
 ) -> str:
-    """
-    Stage 1 Entry Gate — Anubis-style PoW challenge page.
-
-    The page:
-    1. Collects browser environment signals while the Web Worker solves the PoW
-    2. Runs SHA-256 hashcash in a Web Worker (non-blocking main thread)
-    3. Shows animated real-time progress to the user
-    4. On solve: POSTs solution + env report to /bw/gate/verify
-    5. Server issues a gate cookie → redirect to original destination
-
-    No user interaction required for a real browser — it auto-starts.
-    """
-    sid_js         = json.dumps(session_id)
-    token_js       = json.dumps(challenge_token)
-    challenge_js   = json.dumps(challenge)
-    difficulty_js  = json.dumps(difficulty)
-    return_to_js   = json.dumps(return_to)
-
-    return f"""<!doctype html>
+    template = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex,nofollow,noarchive" />
-  <title>Checking your browser… — SinkHole</title>
+  <title>Browser verification - SinkHole</title>
   <script>
-    (() => {{
-      try {{
-        const match = document.cookie.match(/(?:^|;\s*)bw_theme=([^;]+)/);
+    (() => {
+      try {
+        const match = document.cookie.match(/(?:^|;\\s*)bw_theme=([^;]+)/);
         if (!match) return;
         const t = JSON.parse(decodeURIComponent(match[1]));
         const root = document.documentElement;
@@ -248,241 +230,551 @@ def render_gate_challenge_page(
         if (t.muted) root.style.setProperty("--muted", t.muted);
         if (t.accent) root.style.setProperty("--accent", t.accent);
         if (t.font) root.style.setProperty("--font-family", t.font);
-      }} catch (_) {{}}
-    }})();
+      } catch (_) {}
+    })();
   </script>
   <style>
-    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
-    :root {{
-      --bg:      #0f1117;
-      --surface: #1a1d27;
-      --border:  #2a2d3d;
-      --accent:  #6c63ff;
-      --accent2: #48e5c2;
-      --text:    #e2e8f0;
-      --muted:   #64748b;
-      --font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
-      --success: #22c55e;
-      --error:   #ef4444;
-      --radius:  12px;
-    }}
-
-    body {{
-      background: var(--bg);
+    :root {
+      --bg: #f4efe2;
+      --surface: rgba(255, 252, 245, 0.88);
+      --border: #d7ccb8;
+      --text: #1d2430;
+      --muted: #5f6774;
+      --accent: #0b63ce;
+      --accent-2: #1aa179;
+      --ok: #1a7f37;
+      --err: #b42318;
+      --font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      --ui-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      background:
+        radial-gradient(circle at top, rgba(11, 99, 206, 0.10), transparent 32%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.65), rgba(244, 239, 226, 0.95));
       color: var(--text);
       font-family: var(--font-family);
-      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+    .shell {
+      width: min(920px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.8fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+    .panel,
+    .side {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 20px 60px rgba(34, 36, 38, 0.10);
+    }
+    .panel {
+      border-radius: 22px;
+      padding: 26px;
+    }
+    .side {
+      border-radius: 18px;
+      padding: 22px;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 1.5rem;
-    }}
-
-    .card {{
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 2.5rem 2rem;
-      width: 100%;
-      max-width: 420px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    }}
-
-    .logo {{
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      margin-bottom: 2rem;
-    }}
-    .logo-icon {{
-      width: 36px; height: 36px;
-      border-radius: 8px;
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      display: flex; align-items: center; justify-content: center;
-      font-size: 1.1rem;
-    }}
-    .logo-name {{ font-weight: 700; font-size: 1.1rem; letter-spacing: -0.02em; }}
-
-    h1 {{
-      font-size: 1.25rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      margin-bottom: 0.5rem;
-    }}
-    .subtitle {{
+      justify-content: space-between;
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      font: 700 12px/1 var(--ui-family);
+      letter-spacing: 0.18em;
+      color: var(--accent);
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 3.3rem);
+      line-height: 0.96;
+      letter-spacing: -0.04em;
+      max-width: 10ch;
+    }
+    .lede {
+      margin: 16px 0 0;
+      max-width: 46ch;
       color: var(--muted);
-      font-size: 0.875rem;
-      line-height: 1.5;
-      margin-bottom: 2rem;
-    }}
-
-    /* Progress bar */
-    .progress-wrap {{
-      background: var(--border);
+      font: 500 15px/1.7 var(--ui-family);
+    }
+    .meter {
+      margin-top: 24px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(29, 36, 48, 0.10);
+      background: rgba(255, 255, 255, 0.55);
+    }
+    .meter-bar {
+      height: 10px;
       border-radius: 999px;
-      height: 6px;
+      background: rgba(29, 36, 48, 0.10);
       overflow: hidden;
-      margin-bottom: 1rem;
-    }}
-    .progress-bar {{
+    }
+    .meter-fill {
+      width: 14%;
       height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 22px rgba(11, 99, 206, 0.35);
+      transition: width 0.18s ease;
+    }
+    .status {
+      margin: 12px 0 0;
+      min-height: 1.2em;
+      color: var(--muted);
+      font: 500 14px/1.5 var(--ui-family);
+    }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .rail {
+      margin: 18px 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 10px;
+    }
+    .rail li {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 14px;
+      color: var(--muted);
+      font: 500 14px/1.4 var(--ui-family);
+      background: rgba(255, 255, 255, 0.42);
+    }
+    .rail li.active,
+    .rail li.done {
+      color: var(--text);
+    }
+    .icon {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
       border-radius: 999px;
-      background: linear-gradient(90deg, var(--accent), var(--accent2));
-      width: 0%;
-      transition: width 0.2s ease;
-    }}
-    .progress-bar.indeterminate {{
-      width: 40%;
-      animation: slide 1.2s ease-in-out infinite;
-    }}
-    @keyframes slide {{
-      0%   {{ transform: translateX(-100%); }}
-      100% {{ transform: translateX(280%); }}
-    }}
-
-    /* Status text */
-    .status {{
-      font-size: 0.8125rem;
-      color: var(--muted);
-      margin-bottom: 1.5rem;
-      min-height: 1.25rem;
-    }}
-    .status.ok  {{ color: var(--success); }}
-    .status.err {{ color: var(--error); }}
-
-    /* Step checklist */
-    .steps {{ list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }}
-    .steps li {{
-      display: flex; align-items: center; gap: 0.6rem;
-      font-size: 0.8125rem; color: var(--muted);
-    }}
-    .steps li.done  {{ color: var(--text); }}
-    .steps li.done  .icon {{ color: var(--success); }}
-    .steps li.active {{ color: var(--text); }}
-    .steps li.active .icon {{ color: var(--accent); animation: pulse 1s ease infinite; }}
-    @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.4; }} }}
-
-    .icon {{ width: 1rem; font-size: 0.875rem; flex-shrink: 0; }}
-
-    /* Footer */
-    .footer {{
-      margin-top: 2rem;
-      font-size: 0.75rem;
-      color: var(--muted);
-      text-align: center;
-      line-height: 1.6;
-    }}
-
-    /* Retry button (hidden unless error) */
-    .retry-btn {{
-      display: none;
-      margin-top: 1rem;
-      width: 100%;
-      padding: 0.7rem 1rem;
+      border: 1px solid rgba(29, 36, 48, 0.14);
+      font: 700 12px/1 var(--ui-family);
+      background: rgba(255, 255, 255, 0.8);
+    }
+    .rail li.active .icon {
+      color: #fff;
       background: var(--accent);
-      color: white;
-      border: none;
-      border-radius: 8px;
+      border-color: var(--accent);
+    }
+    .rail li.done .icon {
+      color: #fff;
+      background: var(--ok);
+      border-color: var(--ok);
+    }
+    .retry-btn {
+      display: none;
+      margin-top: 16px;
+      width: 100%;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 16px;
+      background: var(--text);
+      color: #fff;
       cursor: pointer;
-      font-size: 0.875rem;
-      font-weight: 500;
-    }}
-    .retry-btn:hover {{ background: #7c74ff; }}
+      font: 700 13px/1 var(--ui-family);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .side-label {
+      margin: 0;
+      color: var(--muted);
+      font: 700 11px/1 var(--ui-family);
+      letter-spacing: 0.14em;
+    }
+    .facts {
+      display: grid;
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .fact {
+      padding-top: 14px;
+      border-top: 1px solid rgba(29, 36, 48, 0.10);
+    }
+    .fact strong {
+      display: block;
+      margin-bottom: 5px;
+      font: 700 12px/1.2 var(--ui-family);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .fact span {
+      color: var(--muted);
+      font: 500 14px/1.6 var(--ui-family);
+    }
+    .seal {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(29, 36, 48, 0.10);
+      color: var(--muted);
+      font: 500 12px/1.6 var(--ui-family);
+    }
+    @media (max-width: 820px) {
+      .shell { grid-template-columns: 1fr; }
+      h1 { max-width: none; }
+    }
   </style>
 </head>
 <body>
-  <div class="card" role="main" aria-labelledby="heading">
-    <div class="logo">
-      <div class="logo-icon" aria-hidden="true">🛡</div>
-      <span class="logo-name">SinkHole</span>
-    </div>
+  <main class="shell" role="main" aria-labelledby="heading">
+    <section class="panel">
+      <p class="eyebrow">TRAFFIC VERIFICATION</p>
+      <h1 id="heading">Proving this request came from a real browser.</h1>
+      <p class="lede">
+        A lightweight proof-of-work is running in your browser while we check for automation signals.
+        Normal visitors do not need to click anything.
+      </p>
 
-    <h1 id="heading">Checking your browser…</h1>
-    <p class="subtitle">
-      This takes less than a second. You do not need to do anything.
-    </p>
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressWrap">
+        <div class="meter-bar"><div class="meter-fill" id="progressBar"></div></div>
+        <p class="status" id="statusText" aria-live="polite">Preparing browser verification...</p>
+      </div>
 
-    <div class="progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressWrap">
-      <div class="progress-bar indeterminate" id="progressBar"></div>
-    </div>
+      <ol class="rail" aria-label="Verification steps">
+        <li id="step-env"><span class="icon" aria-hidden="true">1</span><span>Collect browser environment signals</span></li>
+        <li id="step-pow"><span class="icon" aria-hidden="true">2</span><span>Compute a browser-side proof token</span></li>
+        <li id="step-verify"><span class="icon" aria-hidden="true">3</span><span>Bind the solved proof to this request</span></li>
+      </ol>
 
-    <p class="status" id="statusText" aria-live="polite">Initialising…</p>
+      <button class="retry-btn" id="retryBtn" type="button">Retry verification</button>
+    </section>
 
-    <ol class="steps" aria-label="Verification steps">
-      <li id="step-env" aria-label="Environment check">
-        <span class="icon" aria-hidden="true">○</span>
-        <span>Browser environment check</span>
-      </li>
-      <li id="step-pow" aria-label="Proof of work">
-        <span class="icon" aria-hidden="true">○</span>
-        <span>Proof-of-work computation</span>
-      </li>
-      <li id="step-verify" aria-label="Server verification">
-        <span class="icon" aria-hidden="true">○</span>
-        <span>Server verification</span>
-      </li>
-    </ol>
-
-    <button class="retry-btn" id="retryBtn" type="button" onclick="location.reload()">
-      Try again
-    </button>
-  </div>
-
-  <div class="footer" aria-label="Footer information">
-    Protected by <strong>SinkHole</strong> &middot;
-    Your browser is being verified. No personal data is collected.
-  </div>
+    <aside class="side" aria-label="Verification notes">
+      <div>
+        <p class="side-label">What is happening</p>
+        <div class="facts">
+          <div class="fact">
+            <strong>Client-side hashing</strong>
+            <span>The challenge runs in the browser first, then the solved token is bound to your session on the server.</span>
+          </div>
+          <div class="fact">
+            <strong>Fast path for people</strong>
+            <span>Difficulty is tuned to complete quickly on typical browsers and will fall back if worker execution is unavailable.</span>
+          </div>
+          <div class="fact">
+            <strong>No form to fill</strong>
+            <span>If the browser looks healthy, the page redirects automatically as soon as verification succeeds.</span>
+          </div>
+        </div>
+      </div>
+      <div class="seal">Protected by SinkHole. This page avoids indexing and does not expose origin content before verification completes.</div>
+    </aside>
+  </main>
 
 <script id="mainScript">
-(async () => {{
-  // ── Config ──────────────────────────────────────────────────────────
-  const SESSION_ID     = {sid_js};
-  const CHALLENGE_TOKEN = {token_js};
-  const CHALLENGE      = {challenge_js};
-  const DIFFICULTY     = {difficulty_js};
-  const RETURN_TO      = {return_to_js};
+(async () => {
+  const SESSION_ID = __SID_JS__;
+  const CHALLENGE_TOKEN = __TOKEN_JS__;
+  const CHALLENGE = __CHALLENGE_JS__;
+  const DIFFICULTY = __DIFFICULTY_JS__;
+  const RETURN_TO = __RETURN_TO_JS__;
+  const MAX_SOLVE_MS = 28000;
 
-  // ── DOM refs ─────────────────────────────────────────────────────────
-  const progressBar  = document.getElementById("progressBar");
+  const progressBar = document.getElementById("progressBar");
   const progressWrap = document.getElementById("progressWrap");
-  const statusText   = document.getElementById("statusText");
-  const retryBtn     = document.getElementById("retryBtn");
+  const statusText = document.getElementById("statusText");
+  const retryBtn = document.getElementById("retryBtn");
 
-  function setStep(id, state) {{
+  retryBtn.addEventListener("click", () => location.reload());
+
+  function setStep(id, state) {
     const el = document.getElementById(id);
     if (!el) return;
     el.classList.remove("done", "active");
     if (state) el.classList.add(state);
     const icon = el.querySelector(".icon");
     if (!icon) return;
-    icon.textContent = state === "done" ? "✓" : state === "active" ? "●" : "○";
-  }}
+    icon.textContent = state === "done" ? "OK" : state === "active" ? ".." : icon.textContent;
+  }
 
-  function setProgress(pct) {{
-    progressBar.classList.remove("indeterminate");
-    progressBar.style.width = pct + "%";
-    progressWrap.setAttribute("aria-valuenow", String(pct));
-  }}
+  function setProgress(pct) {
+    const normalized = Math.max(0, Math.min(100, Math.round(pct)));
+    progressBar.style.width = normalized + "%";
+    progressWrap.setAttribute("aria-valuenow", String(normalized));
+  }
 
-  function setStatus(msg, cls) {{
+  function setStatus(msg, cls) {
     statusText.textContent = msg;
-    statusText.className   = "status" + (cls ? " " + cls : "");
-  }}
+    statusText.className = "status" + (cls ? " " + cls : "");
+  }
 
-  function showError(msg) {{
+  function showError(msg) {
     setStatus(msg, "err");
     retryBtn.style.display = "block";
     setProgress(0);
-  }}
+  }
 
-  // ── Step 1: Environment fingerprint (runs while PoW starts) ──────────
-  setStep("step-env", "active");
-  setStatus("Collecting browser signals…");
+  function rightRotate(value, amount) {
+    return (value >>> amount) | (value << (32 - amount));
+  }
 
-  const env = await (async () => {{
-    const report = {{
+  function utf8Bytes(input) {
+    if (window.TextEncoder) {
+      return Array.from(new TextEncoder().encode(input));
+    }
+    return Array.from(unescape(encodeURIComponent(input)), (ch) => ch.charCodeAt(0));
+  }
+
+  function sha256Hex(input) {
+    const bytes = utf8Bytes(input);
+    const words = [];
+    for (let index = 0; index < bytes.length; index += 1) {
+      words[index >> 2] = (words[index >> 2] || 0) | (bytes[index] << (24 - ((index % 4) * 8)));
+    }
+
+    const bitLength = bytes.length * 8;
+    words[bitLength >> 5] = (words[bitLength >> 5] || 0) | (0x80 << (24 - (bitLength % 32)));
+    words[(((bitLength + 64) >> 9) << 4) + 15] = bitLength;
+
+    const initial = [
+      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ];
+    const constants = [
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+
+    for (let offset = 0; offset < words.length; offset += 16) {
+      const schedule = new Array(64);
+      for (let i = 0; i < 16; i += 1) {
+        schedule[i] = words[offset + i] | 0;
+      }
+      for (let i = 16; i < 64; i += 1) {
+        const s0 = rightRotate(schedule[i - 15], 7) ^ rightRotate(schedule[i - 15], 18) ^ (schedule[i - 15] >>> 3);
+        const s1 = rightRotate(schedule[i - 2], 17) ^ rightRotate(schedule[i - 2], 19) ^ (schedule[i - 2] >>> 10);
+        schedule[i] = (((schedule[i - 16] + s0) | 0) + ((schedule[i - 7] + s1) | 0)) | 0;
+      }
+
+      let [a, b, c, d, e, f, g, h] = initial;
+      for (let i = 0; i < 64; i += 1) {
+        const s1 = rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25);
+        const ch = (e & f) ^ (~e & g);
+        const temp1 = (((((h + s1) | 0) + ch) | 0) + ((constants[i] + schedule[i]) | 0)) | 0;
+        const s0 = rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22);
+        const maj = (a & b) ^ (a & c) ^ (b & c);
+        const temp2 = (s0 + maj) | 0;
+
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temp1) | 0;
+        d = c;
+        c = b;
+        b = a;
+        a = (temp1 + temp2) | 0;
+      }
+
+      initial[0] = (initial[0] + a) | 0;
+      initial[1] = (initial[1] + b) | 0;
+      initial[2] = (initial[2] + c) | 0;
+      initial[3] = (initial[3] + d) | 0;
+      initial[4] = (initial[4] + e) | 0;
+      initial[5] = (initial[5] + f) | 0;
+      initial[6] = (initial[6] + g) | 0;
+      initial[7] = (initial[7] + h) | 0;
+    }
+
+    return initial.map((value) => (value >>> 0).toString(16).padStart(8, "0")).join("");
+  }
+
+  async function digestHex(input) {
+    if (window.crypto && window.crypto.subtle && window.TextEncoder) {
+      const bytes = new TextEncoder().encode(input);
+      const hashBuffer = await window.crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    return sha256Hex(input);
+  }
+
+  async function solvePowInMainThread(challenge, difficulty) {
+    const target = "0".repeat(difficulty);
+    const startedAt = Date.now();
+    let nonce = 0;
+    const batchSize = difficulty >= 5 ? 1000 : 2200;
+    while (Date.now() - startedAt < MAX_SOLVE_MS) {
+      for (let i = 0; i < batchSize; i += 1) {
+        const hexNonce = nonce.toString(16);
+        const digest = await digestHex(challenge + hexNonce);
+        if (digest.startsWith(target)) {
+          return { nonce: hexNonce, hash: digest, solveMs: Date.now() - startedAt };
+        }
+        nonce += 1;
+      }
+      const expected = Math.max(1, Math.pow(16, difficulty));
+      setProgress(Math.min(90, 12 + ((nonce / expected) * 78)));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    throw new Error("Browser verification timed out. Please retry.");
+  }
+
+  async function solvePowWithWorker(challenge, difficulty) {
+    if (!(window.Worker && window.Blob && window.URL)) {
+      return solvePowInMainThread(challenge, difficulty);
+    }
+
+    const workerSrc = `
+      function rightRotate(value, amount) {
+        return (value >>> amount) | (value << (32 - amount));
+      }
+
+      function utf8Bytes(input) {
+        if (self.TextEncoder) {
+          return Array.from(new TextEncoder().encode(input));
+        }
+        return Array.from(unescape(encodeURIComponent(input)), (ch) => ch.charCodeAt(0));
+      }
+
+      function sha256Hex(input) {
+        const bytes = utf8Bytes(input);
+        const words = [];
+        for (let index = 0; index < bytes.length; index += 1) {
+          words[index >> 2] = (words[index >> 2] || 0) | (bytes[index] << (24 - ((index % 4) * 8)));
+        }
+
+        const bitLength = bytes.length * 8;
+        words[bitLength >> 5] = (words[bitLength >> 5] || 0) | (0x80 << (24 - (bitLength % 32)));
+        words[(((bitLength + 64) >> 9) << 4) + 15] = bitLength;
+
+        const state = [
+          0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+          0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+        ];
+        const constants = [
+          0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+          0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+          0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+          0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+          0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+          0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+          0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+          0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        ];
+
+        for (let offset = 0; offset < words.length; offset += 16) {
+          const schedule = new Array(64);
+          for (let i = 0; i < 16; i += 1) {
+            schedule[i] = words[offset + i] | 0;
+          }
+          for (let i = 16; i < 64; i += 1) {
+            const s0 = rightRotate(schedule[i - 15], 7) ^ rightRotate(schedule[i - 15], 18) ^ (schedule[i - 15] >>> 3);
+            const s1 = rightRotate(schedule[i - 2], 17) ^ rightRotate(schedule[i - 2], 19) ^ (schedule[i - 2] >>> 10);
+            schedule[i] = (((schedule[i - 16] + s0) | 0) + ((schedule[i - 7] + s1) | 0)) | 0;
+          }
+
+          let a = state[0];
+          let b = state[1];
+          let c = state[2];
+          let d = state[3];
+          let e = state[4];
+          let f = state[5];
+          let g = state[6];
+          let h = state[7];
+          for (let i = 0; i < 64; i += 1) {
+            const s1 = rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25);
+            const ch = (e & f) ^ (~e & g);
+            const temp1 = (((((h + s1) | 0) + ch) | 0) + ((constants[i] + schedule[i]) | 0)) | 0;
+            const s0 = rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22);
+            const maj = (a & b) ^ (a & c) ^ (b & c);
+            const temp2 = (s0 + maj) | 0;
+            h = g;
+            g = f;
+            f = e;
+            e = (d + temp1) | 0;
+            d = c;
+            c = b;
+            b = a;
+            a = (temp1 + temp2) | 0;
+          }
+
+          state[0] = (state[0] + a) | 0;
+          state[1] = (state[1] + b) | 0;
+          state[2] = (state[2] + c) | 0;
+          state[3] = (state[3] + d) | 0;
+          state[4] = (state[4] + e) | 0;
+          state[5] = (state[5] + f) | 0;
+          state[6] = (state[6] + g) | 0;
+          state[7] = (state[7] + h) | 0;
+        }
+
+        return state.map((value) => (value >>> 0).toString(16).padStart(8, "0")).join("");
+      }
+
+      self.onmessage = async (event) => {
+        const challenge = event.data.challenge;
+        const difficulty = event.data.difficulty;
+        const target = "0".repeat(difficulty);
+        const startedAt = Date.now();
+        let nonce = 0;
+        const batchSize = difficulty >= 5 ? 1600 : 3000;
+
+        while (Date.now() - startedAt < 28000) {
+          for (let i = 0; i < batchSize; i += 1) {
+            const hexNonce = nonce.toString(16);
+            const digest = sha256Hex(challenge + hexNonce);
+            if (digest.startsWith(target)) {
+              self.postMessage({ type: "done", nonce: hexNonce, hash: digest, solveMs: Date.now() - startedAt });
+              return;
+            }
+            nonce += 1;
+          }
+          self.postMessage({ type: "progress", nonce: nonce, difficulty: difficulty });
+        }
+
+        self.postMessage({ type: "timeout" });
+      };
+    `;
+
+    const blob = new Blob([workerSrc], { type: "application/javascript" });
+    const worker = new Worker(window.URL.createObjectURL(blob));
+
+    try {
+      return await new Promise((resolve, reject) => {
+        worker.onmessage = (event) => {
+          const data = event.data || {};
+          if (data.type === "progress") {
+            const expected = Math.max(1, Math.pow(16, data.difficulty || difficulty));
+            setProgress(Math.min(90, 12 + ((data.nonce / expected) * 78)));
+            return;
+          }
+          if (data.type === "done") {
+            resolve({ nonce: data.nonce, hash: data.hash, solveMs: data.solveMs });
+            return;
+          }
+          reject(new Error("timeout"));
+        };
+        worker.onerror = () => reject(new Error("worker"));
+        worker.postMessage({ challenge, difficulty });
+      });
+    } catch (_) {
+      return solvePowInMainThread(challenge, difficulty);
+    } finally {
+      worker.terminate();
+    }
+  }
+
+  async function collectEnv() {
+    const report = {
       webdriver: false,
       chrome_obj: false,
       plugins_count: 0,
@@ -494,151 +786,118 @@ def render_gate_challenge_page(
       device_pixel_ratio: 1,
       timezone: "",
       renderer: "unknown",
-    }};
+    };
 
-    try {{ report.webdriver = navigator.webdriver === true; }} catch {{ }}
-    try {{ report.chrome_obj = typeof window.chrome !== "undefined"; }} catch {{ }}
-    try {{ report.plugins_count = navigator.plugins ? navigator.plugins.length : 0; }} catch {{ }}
-    try {{ report.languages = Array.from(navigator.languages || []); }} catch {{ }}
-    try {{ report.viewport = [window.innerWidth, window.innerHeight]; }} catch {{ }}
-    try {{ report.notification_api = typeof Notification !== "undefined"; }} catch {{ }}
-    try {{ report.perf_memory = "memory" in performance; }} catch {{ }}
-    try {{ report.touch_support = "ontouchstart" in window || navigator.maxTouchPoints > 0; }} catch {{ }}
-    try {{ report.device_pixel_ratio = window.devicePixelRatio || 1; }} catch {{ }}
-    try {{ report.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; }} catch {{ }}
+    try { report.webdriver = navigator.webdriver === true; } catch (_) {}
+    try { report.chrome_obj = typeof window.chrome !== "undefined"; } catch (_) {}
+    try { report.plugins_count = navigator.plugins ? navigator.plugins.length : 0; } catch (_) {}
+    try { report.languages = Array.from(navigator.languages || []); } catch (_) {}
+    try { report.viewport = [window.innerWidth || 0, window.innerHeight || 0]; } catch (_) {}
+    try { report.notification_api = typeof Notification !== "undefined"; } catch (_) {}
+    try { report.perf_memory = "memory" in performance; } catch (_) {}
+    try { report.touch_support = "ontouchstart" in window || navigator.maxTouchPoints > 0; } catch (_) {}
+    try { report.device_pixel_ratio = window.devicePixelRatio || 1; } catch (_) {}
+    try { report.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (_) {}
 
-    // WebGL renderer — the most reliable headless indicator
-    try {{
+    try {
       const canvas = document.createElement("canvas");
       const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
-      if (gl) {{
-        const dbg = gl.getExtension("WEBGL_debug_renderer_info");
-        report.renderer = dbg
-          ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
-          : gl.getParameter(gl.RENDERER);
-      }}
-    }} catch {{ }}
+      if (gl) {
+        report.renderer = gl.getParameter(gl.RENDERER) || "unknown";
+      }
+    } catch (_) {}
 
     return report;
-  }})();
+  }
+
+  setStep("step-env", "active");
+  setStatus("Collecting browser environment signals...");
+  setProgress(6);
+  const env = await collectEnv();
 
   setStep("step-env", "done");
   setStep("step-pow", "active");
-  setStatus("Running proof-of-work… (this takes ~1-2 seconds)");
-  setProgress(5);
+  setStatus("Computing proof-of-work in your browser...");
+  setProgress(12);
 
-  // ── Step 2: PoW in a Web Worker ──────────────────────────────────────
-  const workerSrc = `
-    self.onmessage = async (e) => {{
-      const {{ challenge, difficulty }} = e.data;
-      const target   = "0".repeat(difficulty);
-      const enc      = new TextEncoder();
-      let   nonce    = 0;
-      let   found    = null;
-      const BATCH    = 5000;   // report progress every N iterations
-
-      while (!found) {{
-        for (let i = 0; i < BATCH; i++) {{
-          const hexNonce = nonce.toString(16);
-          const buf      = enc.encode(challenge + hexNonce);
-          const ab       = await crypto.subtle.digest("SHA-256", buf);
-          const hex      = Array.from(new Uint8Array(ab))
-            .map(b => b.toString(16).padStart(2, "0")).join("");
-          if (hex.startsWith(target)) {{
-            found = {{ nonce: hexNonce, hash: hex }};
-            break;
-          }}
-          nonce++;
-        }}
-        if (!found) {{
-          self.postMessage({{ type: "progress", nonce }});
-        }}
-      }}
-      self.postMessage({{ type: "done", ...found }});
-    }};
-  `;
-
-  const blob   = new Blob([workerSrc], {{ type: "application/javascript" }});
-  const worker = new Worker(URL.createObjectURL(blob));
-
-  const startedAt = Date.now();
-  let solvedNonce = null;
-  let solvedHash  = null;
-
-  const powResult = await new Promise((resolve, reject) => {{
-    worker.onmessage = (e) => {{
-      if (e.data.type === "progress") {{
-        // Update progress bar proportionally to expected iterations
-        const expected = Math.pow(16, DIFFICULTY);
-        const pct = Math.min(90, Math.round((e.data.nonce / expected) * 85) + 5);
-        setProgress(pct);
-      }} else if (e.data.type === "done") {{
-        resolve(e.data);
-      }}
-    }};
-    worker.onerror = (err) => reject(err);
-    worker.postMessage({{ challenge: CHALLENGE, difficulty: DIFFICULTY }});
-  }});
-
-  worker.terminate();
-  solvedNonce = powResult.nonce;
-  solvedHash  = powResult.hash;
-  const solveMs = Date.now() - startedAt;
+  let powResult;
+  try {
+    powResult = await solvePowWithWorker(CHALLENGE, DIFFICULTY);
+  } catch (err) {
+    showError((err && err.message) || "Verification hash failed. Please retry.");
+    return;
+  }
 
   setStep("step-pow", "done");
   setStep("step-verify", "active");
-  setStatus("Verifying with server…");
+  setStatus("Binding solved proof to this request...");
   setProgress(95);
 
-  // ── Step 3: Submit to server ─────────────────────────────────────────
-  const payload = {{
+  const payload = {
     schema_version: "1.0",
-    session_id:     SESSION_ID,
+    session_id: SESSION_ID,
     challenge_token: CHALLENGE_TOKEN,
-    challenge:      CHALLENGE,
-    nonce:          solvedNonce,
-    hash:           solvedHash,
-    solve_ms:       solveMs,
-    return_to:      RETURN_TO,
-    env:            env,
-  }};
+    challenge: CHALLENGE,
+    nonce: powResult.nonce,
+    hash: powResult.hash,
+    solve_ms: powResult.solveMs,
+    return_to: RETURN_TO,
+    env: env,
+  };
 
   let resp;
-  try {{
-    resp = await fetch("/bw/gate/verify", {{
-      method:  "POST",
-      headers: {{ "content-type": "application/json" }},
-      body:    JSON.stringify(payload),
+  try {
+    resp = await fetch("/bw/gate/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
       credentials: "same-origin",
-    }});
-  }} catch (networkErr) {{
-    showError("Network error — please check your connection and retry.");
+    });
+  } catch (_) {
+    showError("Network error while verifying. Please retry.");
     return;
-  }}
+  }
 
-  if (!resp.ok) {{
+  if (!resp.ok) {
+    const contentType = (resp.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("text/html")) {
+      const html = await resp.text().catch(() => "");
+      if (html) {
+        document.open();
+        document.write(html);
+        document.close();
+        return;
+      }
+    }
+
+    if (resp.status === 429) {
+      showError("Too many attempts. Wait a moment and retry.");
+      return;
+    }
+
     const detail = await resp.text().catch(() => "");
-    if (resp.status === 429) {{
-      showError("Too many attempts. Please wait a moment and try again.");
-    }} else {{
-      showError("Verification failed. If you are a real person, please retry.");
-    }}
+    showError(detail || "Verification failed. Please retry.");
     return;
-  }}
+  }
 
   const result = await resp.json();
-
   setStep("step-verify", "done");
   setProgress(100);
-  setStatus("Verified! Redirecting…", "ok");
-
-  // Redirect to the original URL
-  await new Promise(r => setTimeout(r, 350));  // brief pause so user sees ✓
+  setStatus("Browser verified. Redirecting...", "ok");
+  await new Promise((resolve) => setTimeout(resolve, 280));
   location.replace(result.next_path || RETURN_TO);
-}})();
+})();
 </script>
 </body>
 </html>"""
+    return (
+        template
+        .replace("__SID_JS__", json.dumps(session_id))
+        .replace("__TOKEN_JS__", json.dumps(challenge_token))
+        .replace("__CHALLENGE_JS__", json.dumps(challenge))
+        .replace("__DIFFICULTY_JS__", json.dumps(difficulty))
+        .replace("__RETURN_TO_JS__", json.dumps(return_to))
+    )
 
 
 def render_gate_blocked_page(*, session_id: str, challenge_token: str, challenge: str, difficulty: int, return_to: str, reasons: list[str]) -> str:
@@ -818,7 +1077,7 @@ def render_challenge_page(*, session_id: str, token: str, nonce: str, target_pat
   <script>
     (() => {{
       try {{
-        const match = document.cookie.match(/(?:^|;\s*)bw_theme=([^;]+)/);
+        const match = document.cookie.match(/(?:^|;\\s*)bw_theme=([^;]+)/);
         if (!match) return;
         const t = JSON.parse(decodeURIComponent(match[1]));
         const root = document.documentElement;
