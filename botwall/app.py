@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
-from .html import render_challenge_page, render_dashboard, render_decoy_page, render_gate_blocked_page, render_gate_challenge_page, render_origin_page, render_recovery_page, render_telemetry_page, sdk_script
+from .html import render_challenge_page, render_dashboard, render_decoy_page, render_gate_blocked_page, render_gate_challenge_page, render_origin_page, render_recovery_page, render_telemetry_page, render_bot_caught_page, sdk_script
 from .models import (
     BeaconEvent,
     CheckResponse,
@@ -154,7 +154,8 @@ def _redirect_explicit_scraper_to_decoy(
     session["updated_at"] = now_ts()
     store.store.save_session(session)
 
-    response = RedirectResponse(url=f"/bw/decoy/{node_id % settings.decoy_max_nodes}?sid={session_id}", status_code=302)
+    # Redirect to bot-caught page instead of regular decoy
+    response = RedirectResponse(url=f"/bw/bot-caught?sid={session_id}", status_code=302)
     response.headers["x-botwall-decision"] = "decoy"
     response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
     _attach_cookie(response, settings, session_id)
@@ -664,6 +665,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         response = HTMLResponse(render_decoy_page(node=node, session_id=session_id))
         response.headers["x-botwall-decision"] = "decoy"
+        response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/bw/bot-caught")
+    async def bw_bot_caught(request: Request) -> HTMLResponse:
+        """Bot/scraper detection page - shows 'YOU LOWDE BOT' message."""
+        session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        session = store.store.load_session(session_id, ip_hash)
+
+        # Get the reasons why this was flagged as a bot
+        reasons = session.get("reasons", [])
+        user_agent = session.get("last_user_agent", request.headers.get("user-agent", ""))
+
+        response = HTMLResponse(render_bot_caught_page(
+            session_id=session_id,
+            user_agent=user_agent,
+            reasons=reasons[-6:] if reasons else None
+        ))
+        response.headers["x-botwall-decision"] = "bot_caught"
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
         _attach_cookie(response, cfg, session_id)
         return response

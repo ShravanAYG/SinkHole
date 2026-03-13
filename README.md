@@ -89,3 +89,7 @@ cd /home/bb/sinkhole
 
 - Screenshot detection on the open web is heuristic only; this implementation does not claim deterministic screenshot detection.
 - Decoy responses set robots exclusion signals (`noindex/noarchive/nofollow`) and are isolated from normal content routes.
+
+## Deployment Automation
+
+- For push-to-deploy on AWS using GitHub Actions + SSH, see `CICD_AWS_SETUP.md`.

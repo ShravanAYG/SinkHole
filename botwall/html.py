@@ -1285,6 +1285,111 @@ def render_decoy_page(node: DecoyNode, session_id: str) -> str:
 </html>"""
 
 
+def render_bot_caught_page(*, session_id: str, user_agent: str = "", reasons: list[str] | None = None) -> str:
+    """Render the 'YOU LOWDE BOT' page for detected scrapers/crawlers."""
+    reasons_html = ""
+    if reasons:
+        items = "".join(f"<li>{html.escape(r)}</li>" for r in reasons[-6:])
+        reasons_html = f"<ul class='reasons'>{items}</ul>"
+
+    ua_display = html.escape(user_agent[:200]) if user_agent else "Unknown"
+
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <title>YOU LOWDE BOT - SinkHole</title>
+  <style>
+    :root {{ --bg: #0a0a0a; --surface: #111; --border: #333; --text: #e0e0e0; --accent: #ff4444; --muted: #666; }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      padding: 2rem;
+    }}
+    .container {{
+      text-align: center;
+      max-width: 700px;
+    }}
+    h1 {{
+      font-size: 4rem;
+      margin: 0 0 1rem;
+      color: var(--accent);
+      text-shadow: 0 0 20px rgba(255,68,68,0.5);
+      letter-spacing: -0.02em;
+      animation: pulse 2s ease-in-out infinite;
+    }}
+    @keyframes pulse {{
+      0%, 100% {{ opacity: 1; }}
+      50% {{ opacity: 0.7; }}
+    }}
+    .subtitle {{
+      font-size: 1.2rem;
+      color: var(--muted);
+      margin-bottom: 2rem;
+    }}
+    .ua-box {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin: 1rem 0;
+      font-size: 0.85rem;
+      color: #888;
+      word-break: break-all;
+    }}
+    .ua-box strong {{ color: var(--accent); }}
+    .reasons {{
+      list-style: none;
+      padding: 0;
+      margin: 1.5rem 0;
+      text-align: left;
+      display: inline-block;
+    }}
+    .reasons li {{
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #222;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }}
+    .reasons li::before {{
+      content: "✗ ";
+      color: var(--accent);
+    }}
+    .footer {{
+      margin-top: 2rem;
+      font-size: 0.8rem;
+      color: #444;
+    }}
+    .skull {{
+      font-size: 6rem;
+      margin-bottom: 1rem;
+      display: block;
+    }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <span class="skull">🤖❌</span>
+    <h1>YOU LOWDE BOT</h1>
+    <p class="subtitle">Your scraper has been detected and trapped.<br>Enjoy scraping this fake data forever.</p>
+    {reasons_html}
+    <div class="ua-box">
+      <strong>Detected User-Agent:</strong><br>{ua_display}
+    </div>
+    <p class="footer">Session: {html.escape(session_id[:16])}... | SinkHole Botwall Protection</p>
+  </div>
+</body>
+</html>"""
+
+
 def render_origin_page(*, session_id: str, page_id: int, links: list[tuple[str, str]]) -> str:
     items = "".join(f'<li><a href="{html.escape(url)}">{html.escape(label)}</a></li>' for url, label in links)
     return f"""<!doctype html>
