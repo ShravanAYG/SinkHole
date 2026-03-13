@@ -552,7 +552,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ua = request.headers.get("user-agent", "")
         env_score, env_reasons, hard_fail = score_gate_environment(env_dict, request_user_agent=ua)
 
-        # 3. Hard fail: redirect to bot-caught page immediately
+        # 3. Hard fail: redirect to decoy hellhole immediately (silent poisoning)
         if hard_fail:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
             session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
@@ -560,9 +560,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _record_decision(session, "decoy", env_reasons)
             store.store.save_session(session)
             
-            # Redirect to bot-caught page with absolute clarity
-            response = RedirectResponse(url=f"/bw/bot-caught?sid={session_id}", status_code=302)
-            response.headers["x-botwall-decision"] = "bot_caught"
+            # Redirect to decoy hellhole for silent data poisoning
+            # Use node_id based on session hash for consistency
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            response = RedirectResponse(
+                url=f"/bw/decoy/{node_id}?sid={session_id}&caught=1", 
+                status_code=302
+            )
+            response.headers["x-botwall-decision"] = "decoy"
             response.headers["x-botwall-reasons"] = ",".join(env_reasons[-6:])
             _attach_cookie(response, cfg, session_id)
             return response
