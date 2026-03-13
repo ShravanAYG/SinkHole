@@ -13,6 +13,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
+from .embeddings_content import generate_fake_decoy_content, FakeContentConfig
+from .embeddings_renderer import render_embeddings_decoy_page
+from .enhanced_decoy import build_embeddings_node
 from .html import (
     render_about_page,
     render_behavioral_challenge_page,
@@ -1120,14 +1123,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/bw/decoy/{node_id}")
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
-        node = build_node(
+        # Use embeddings-based content generator for sophisticated fake content
+        node = build_embeddings_node(
             session_id,
             node_id % cfg.decoy_max_nodes,
             max_nodes=cfg.decoy_max_nodes,
             min_links=cfg.decoy_min_links,
             max_links=cfg.decoy_max_links,
+            coherence_level=0.9,  # High grammatical coherence
+            falsehood_density=0.4,  # 40% facts are wrong
+            human_markers=True,  # Show human-detectable markers
         )
-        response = HTMLResponse(render_decoy_page(node=node, session_id=session_id))
+        response = HTMLResponse(render_embeddings_decoy_page(node=node, session_id=session_id))
         response.headers["x-botwall-decision"] = "decoy"
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
         _attach_cookie(response, cfg, session_id)
