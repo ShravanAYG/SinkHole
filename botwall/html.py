@@ -2075,6 +2075,142 @@ def render_telemetry_page(data: dict[str, Any]) -> str:
 </html>"""
 
 
+def render_behavioral_challenge_page(*, session_id: str, challenge_token: str, return_to: str) -> str:
+    """Behavioral reCAPTCHA - replaces PoW with mouse/typing analysis."""
+    sid_js = json.dumps(session_id)
+    token_js = json.dumps(challenge_token)
+    return_js = json.dumps(return_to)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <title>Human Verification - SinkHole</title>
+  <style>
+    :root {{ --bg: #f4efe2; --surface: rgba(255, 252, 245, 0.95); --border: #d7ccb8; --text: #1d2430; --muted: #5f6774; --accent: #0b63ce; --accent-2: #1aa179; --ok: #1a7f37; --err: #b42318; --font-family: "Iowan Old Style", Georgia, serif; --ui-family: "IBM Plex Sans", "Segoe UI", sans-serif; }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ margin: 0; min-height: 100dvh; background: radial-gradient(circle at top, rgba(11, 99, 206, 0.08), transparent 40%), linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(244, 239, 226, 0.98)); color: var(--text); font-family: var(--font-family); display: grid; place-items: center; padding: 20px; }}
+    .shell {{ width: min(720px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: 0 30px 80px rgba(34, 36, 38, 0.12); }}
+    .eyebrow {{ margin: 0 0 12px; font: 700 11px/1 var(--ui-family); letter-spacing: 0.22em; color: var(--accent); text-transform: uppercase; }}
+    h1 {{ margin: 0 0 16px; font-size: clamp(1.6rem, 3.5vw, 2.2rem); }}
+    .lede {{ margin: 0 0 24px; max-width: 50ch; color: var(--muted); font: 500 15px/1.6 var(--ui-family); }}
+    .challenge-area {{ background: linear-gradient(135deg, rgba(11, 99, 206, 0.03), rgba(26, 161, 121, 0.03)); border: 2px dashed var(--border); border-radius: 16px; padding: 24px; margin: 20px 0; min-height: 400px; }}
+    .target-game {{ position: relative; height: 220px; background: rgba(255, 255, 255, 0.6); border-radius: 12px; overflow: hidden; cursor: crosshair; margin-bottom: 16px; }}
+    .target {{ position: absolute; width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 4px 15px rgba(11, 99, 206, 0.4); cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease; display: grid; place-items: center; color: white; font: 700 14px/1 var(--ui-family); user-select: none; }}
+    .target:hover {{ transform: scale(1.1); }} .target.hit {{ transform: scale(1.5); opacity: 0; pointer-events: none; }}
+    .typing-area {{ padding: 16px; background: rgba(255, 255, 255, 0.8); border-radius: 12px; }}
+    .typing-prompt {{ font: 500 15px/1.5 var(--ui-family); color: var(--text); margin-bottom: 12px; padding: 10px 14px; background: rgba(11, 99, 206, 0.05); border-radius: 8px; border-left: 3px solid var(--accent); }}
+    .typing-input {{ width: 100%; padding: 12px 16px; font: 500 15px/1.5 var(--ui-family); border: 2px solid var(--border); border-radius: 10px; background: white; color: var(--text); outline: none; }}
+    .typing-input:focus {{ border-color: var(--accent); }} .typing-input.complete {{ border-color: var(--ok); }} .typing-input.error {{ border-color: var(--err); }}
+    .meter {{ margin-top: 20px; padding: 16px; border-radius: 14px; background: rgba(255, 255, 255, 0.7); }}
+    .meter-bar {{ height: 10px; border-radius: 999px; background: rgba(29, 36, 48, 0.08); overflow: hidden; }}
+    .meter-fill {{ width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.4s ease; }}
+    .status {{ margin: 12px 0 0; min-height: 1.4em; color: var(--muted); font: 500 14px/1.5 var(--ui-family); }}
+    .status.ok {{ color: var(--ok); }} .status.err {{ color: var(--err); }}
+    .hud {{ display: flex; gap: 24px; margin-bottom: 16px; padding: 12px 16px; background: rgba(255, 255, 255, 0.8); border-radius: 10px; font: 600 13px/1 var(--ui-family); }}
+    .hud-item {{ display: flex; align-items: center; gap: 6px; }} .hud-label {{ color: var(--muted); }} .hud-value {{ color: var(--accent); font-size: 16px; }}
+    .submit-btn {{ display: none; margin-top: 20px; width: 100%; padding: 16px 24px; border: 0; border-radius: 12px; background: var(--text); color: white; font: 700 15px/1 var(--ui-family); cursor: pointer; }}
+    .submit-btn:disabled {{ opacity: 0.6; cursor: not-allowed; }}
+    .retry-btn {{ display: none; margin-top: 12px; padding: 12px 20px; border: 2px solid var(--border); border-radius: 10px; background: white; color: var(--text); font: 600 13px/1 var(--ui-family); cursor: pointer; }}
+    .seal {{ margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font: 500 12px/1.6 var(--ui-family); text-align: center; }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <p class="eyebrow">Human Verification</p>
+    <h1>Prove you're human</h1>
+    <p class="lede">Complete the challenges below. We analyze interaction patterns to detect bots vs humans.</p>
+    <div class="challenge-area">
+      <div class="hud">
+        <div class="hud-item"><span class="hud-label">Targets:</span><span class="hud-value" id="hitCount">0/5</span></div>
+        <div class="hud-item"><span class="hud-label">Typing:</span><span class="hud-value" id="typingStatus">--</span></div>
+        <div class="hud-item"><span class="hud-label">Progress:</span><span class="hud-value" id="progressPercent">0%</span></div>
+      </div>
+      <div class="target-game" id="targetGame"></div>
+      <div class="typing-area">
+        <div class="typing-prompt" id="typingPrompt">Type the phrase below</div>
+        <input type="text" class="typing-input" id="typingInput" placeholder="Start typing..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      </div>
+    </div>
+    <div class="meter">
+      <div class="meter-bar"><div class="meter-fill" id="progressBar"></div></div>
+      <p class="status" id="statusText">Click targets to begin...</p>
+    </div>
+    <button class="submit-btn" id="submitBtn" disabled>Verifying...</button>
+    <button class="retry-btn" id="retryBtn" onclick="location.reload()">Try again</button>
+    <div class="seal">Protected by SinkHole Behavioral Analysis. Bots redirected to decoy.</div>
+  </main>
+<script>
+(async () => {{
+  const SESSION_ID = {sid_js}, CHALLENGE_TOKEN = {token_js}, RETURN_TO = {return_js};
+  const state = {{ hits: 0, targetHitsRequired: 5, typingComplete: false, targetProgress: 0, typingProgress: 0, mousePoints: [], keystrokes: [], clickEvents: [], startTime: Date.now(), typingStartTime: 0 }};
+  const targetGame = document.getElementById('targetGame'), typingInput = document.getElementById('typingInput'), hitCount = document.getElementById('hitCount'), typingStatus = document.getElementById('typingStatus'), progressPercent = document.getElementById('progressPercent'), progressBar = document.getElementById('progressBar'), statusText = document.getElementById('statusText'), submitBtn = document.getElementById('submitBtn'), retryBtn = document.getElementById('retryBtn'), typingPrompt = document.getElementById('typingPrompt');
+  const phrases = ["The quick brown fox jumps over the lazy dog", "Pack my box with five dozen liquor jugs", "Sphinx of black quartz judge my vow"];
+  const targetPhrase = phrases[Math.floor(Math.random() * phrases.length)];
+  typingPrompt.textContent = 'Type: "' + targetPhrase + '"';
+  document.addEventListener('mousemove', (e) => {{ state.mousePoints.push({{ x: e.clientX, y: e.clientY, t: Date.now() - state.startTime }}); if (state.mousePoints.length > 200) state.mousePoints.shift(); }}, {{ passive: true }});
+  function spawnTarget() {{
+    if (state.hits >= state.targetHitsRequired) return;
+    const target = document.createElement('div'); target.className = 'target'; target.textContent = state.hits + 1;
+    const gameRect = targetGame.getBoundingClientRect(), margin = 60;
+    let x = margin + Math.random() * (gameRect.width - margin * 2), y = margin + Math.random() * (gameRect.height - margin * 2);
+    target.style.left = x + 'px'; target.style.top = y + 'px';
+    let hit = false; const spawnTime = Date.now();
+    const moveInterval = setInterval(() => {{ if (hit || state.hits >= state.targetHitsRequired) {{ clearInterval(moveInterval); return; }} x += (Math.random() - 0.5) * 30; y += (Math.random() - 0.5) * 30; x = Math.max(margin, Math.min(gameRect.width - margin, x)); y = Math.max(margin, Math.min(gameRect.height - margin, y)); target.style.left = x + 'px'; target.style.top = y + 'px'; }}, 400);
+    target.addEventListener('mousedown', (e) => {{ if (hit) return; hit = true; clearInterval(moveInterval); const hitTime = Date.now(); state.hits++; state.targetProgress = (state.hits / state.targetHitsRequired) * 50; state.clickEvents.push({{ target_num: state.hits, spawn_time: spawnTime - state.startTime, hit_time: hitTime - state.startTime, duration: hitTime - spawnTime, x: e.clientX, y: e.clientY }}); target.classList.add('hit'); setTimeout(() => target.remove(), 200); updateUI(); if (state.hits < state.targetHitsRequired) {{ setTimeout(spawnTarget, 400); }} else {{ state.typingStartTime = Date.now(); typingInput.focus(); statusText.textContent = "Great! Now type..."; statusText.className = "status ok"; }} }});
+    targetGame.appendChild(target);
+  }}
+  typingInput.addEventListener('keydown', (e) => {{ const now = Date.now(); if (!state.typingStartTime) state.typingStartTime = now; state.keystrokes.push({{ key: e.key, press_time: now - state.startTime }}); }});
+  typingInput.addEventListener('keyup', (e) => {{ const now = Date.now(); const lastStroke = state.keystrokes[state.keystrokes.length - 1]; if (lastStroke && lastStroke.key === e.key) {{ lastStroke.release_time = now - state.startTime; lastStroke.dwell = lastStroke.release_time - lastStroke.press_time; }} }});
+  typingInput.addEventListener('input', (e) => {{ const value = e.target.value; const progress = Math.min(1, value.length / targetPhrase.length); state.typingProgress = progress * 50; if (value === targetPhrase) {{ state.typingComplete = true; typingInput.classList.add('complete'); typingInput.disabled = true; typingStatus.textContent = "Done!"; statusText.textContent = "Submitting..."; statusText.className = "status ok"; submitVerification(); }} else if (targetPhrase.startsWith(value)) {{ typingStatus.textContent = Math.floor(progress * 100) + "%"; typingInput.classList.remove('error'); }} else {{ typingStatus.textContent = "Fix typo"; typingInput.classList.add('error'); }} updateUI(); }});
+  function updateUI() {{ hitCount.textContent = state.hits + '/' + state.targetHitsRequired; progressPercent.textContent = Math.floor(state.targetProgress + state.typingProgress) + '%'; progressBar.style.width = (state.targetProgress + state.typingProgress) + '%'; }}
+  async function submitVerification() {{
+    submitBtn.style.display = 'block'; submitBtn.disabled = true; submitBtn.textContent = 'Analyzing...';
+    
+    // Collect environment data for bot detection
+    const envData = await collectEnv();
+    
+    const behavioralData = {{ mouse_data: {{ points: state.mousePoints.slice(-100), click_events: state.clickEvents }}, keystrokes: state.keystrokes, timing: {{ total_duration_ms: Date.now() - state.startTime, target_phase_ms: state.typingStartTime - state.startTime, typing_phase_ms: Date.now() - state.typingStartTime }} }};
+    try {{
+      const resp = await fetch('/bw/gate/verify', {{ method: 'POST', headers: {{ 'content-type': 'application/json' }}, body: JSON.stringify({{ schema_version: '2.0', session_id: SESSION_ID, challenge_token: CHALLENGE_TOKEN, behavioral_data: behavioralData, env: envData, return_to: RETURN_TO }}), credentials: 'same-origin' }});
+      if (!resp.ok) {{ const errorData = await resp.json().catch(() => ({{}})); if (errorData.decision === 'decoy' && errorData.next_path) {{ location.replace(errorData.next_path); return; }} throw new Error(errorData.detail || 'Failed'); }}
+      const result = await resp.json();
+      if (result.decision === 'allow') {{ submitBtn.textContent = 'Verified!'; setTimeout(() => location.replace(result.next_path || RETURN_TO), 500); }} else if (result.next_path) {{ location.replace(result.next_path); }}
+    }} catch (err) {{ submitBtn.textContent = 'Error'; submitBtn.disabled = false; statusText.textContent = err.message || 'Failed. Retry.'; statusText.className = 'status err'; retryBtn.style.display = 'inline-block'; }}
+  }}
+  
+  // Environment collection for automation detection
+  async function collectEnv() {{
+    const report = {{}};
+    try {{ report.webdriver = navigator.webdriver; }} catch (_) {{}}
+    try {{ report.plugins = navigator.plugins?.length || 0; }} catch (_) {{}}
+    try {{ report.languages = navigator.languages; }} catch (_) {{}}
+    try {{ report.hardware_concurrency = navigator.hardwareConcurrency; }} catch (_) {{}}
+    try {{ report.device_memory = navigator.deviceMemory; }} catch (_) {{}}
+    try {{ report.screen_width = screen.width; }} catch (_) {{}}
+    try {{ report.screen_height = screen.height; }} catch (_) {{}}
+    try {{ report.platform = navigator.platform; }} catch (_) {{}}
+    try {{ 
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl');
+      if (gl) {{ report.renderer = gl.getParameter(gl.RENDERER); report.vendor = gl.getParameter(gl.VENDOR); }}
+    }} catch (_) {{}}
+    // Automation globals check
+    const automationGlobals = ['__webdriver_script_fn', 'cdc_adoQpoasnfa76pfcZLmcfl_', '__playwright', '__pw_manual', '__PW_EVALUATE', '__firecrawl', 'firecrawl_id'];
+    report.js_globals = [];
+    for (const g of automationGlobals) {{ try {{ if (window[g]) report.js_globals.push(g); }} catch (_) {{}} }}
+    return report;
+  }}
+  
+  spawnTarget();
+}})();
+</script>
+</body>
+</html>"""
+
+
+
 def render_test_suite_page(
     session_id: str,
     website: dict[str, Any] | None,
@@ -2604,3 +2740,139 @@ def render_enhanced_telemetry_page(data: dict[str, Any]) -> str:
   </div>
 </body>
 </html>"""
+
+
+def render_behavioral_challenge_page(*, session_id: str, challenge_token: str, return_to: str) -> str:
+    """Behavioral reCAPTCHA - replaces PoW with mouse/typing analysis."""
+    sid_js = json.dumps(session_id)
+    token_js = json.dumps(challenge_token)
+    return_js = json.dumps(return_to)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <title>Human Verification - SinkHole</title>
+  <style>
+    :root {{ --bg: #f4efe2; --surface: rgba(255, 252, 245, 0.95); --border: #d7ccb8; --text: #1d2430; --muted: #5f6774; --accent: #0b63ce; --accent-2: #1aa179; --ok: #1a7f37; --err: #b42318; --font-family: "Iowan Old Style", Georgia, serif; --ui-family: "IBM Plex Sans", "Segoe UI", sans-serif; }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ margin: 0; min-height: 100dvh; background: radial-gradient(circle at top, rgba(11, 99, 206, 0.08), transparent 40%), linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(244, 239, 226, 0.98)); color: var(--text); font-family: var(--font-family); display: grid; place-items: center; padding: 20px; }}
+    .shell {{ width: min(720px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: 0 30px 80px rgba(34, 36, 38, 0.12); }}
+    .eyebrow {{ margin: 0 0 12px; font: 700 11px/1 var(--ui-family); letter-spacing: 0.22em; color: var(--accent); text-transform: uppercase; }}
+    h1 {{ margin: 0 0 16px; font-size: clamp(1.6rem, 3.5vw, 2.2rem); }}
+    .lede {{ margin: 0 0 24px; max-width: 50ch; color: var(--muted); font: 500 15px/1.6 var(--ui-family); }}
+    .challenge-area {{ background: linear-gradient(135deg, rgba(11, 99, 206, 0.03), rgba(26, 161, 121, 0.03)); border: 2px dashed var(--border); border-radius: 16px; padding: 24px; margin: 20px 0; min-height: 400px; }}
+    .target-game {{ position: relative; height: 220px; background: rgba(255, 255, 255, 0.6); border-radius: 12px; overflow: hidden; cursor: crosshair; margin-bottom: 16px; }}
+    .target {{ position: absolute; width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 4px 15px rgba(11, 99, 206, 0.4); cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease; display: grid; place-items: center; color: white; font: 700 14px/1 var(--ui-family); user-select: none; }}
+    .target:hover {{ transform: scale(1.1); }} .target.hit {{ transform: scale(1.5); opacity: 0; pointer-events: none; }}
+    .typing-area {{ padding: 16px; background: rgba(255, 255, 255, 0.8); border-radius: 12px; }}
+    .typing-prompt {{ font: 500 15px/1.5 var(--ui-family); color: var(--text); margin-bottom: 12px; padding: 10px 14px; background: rgba(11, 99, 206, 0.05); border-radius: 8px; border-left: 3px solid var(--accent); }}
+    .typing-input {{ width: 100%; padding: 12px 16px; font: 500 15px/1.5 var(--ui-family); border: 2px solid var(--border); border-radius: 10px; background: white; color: var(--text); outline: none; }}
+    .typing-input:focus {{ border-color: var(--accent); }} .typing-input.complete {{ border-color: var(--ok); }} .typing-input.error {{ border-color: var(--err); }}
+    .meter {{ margin-top: 20px; padding: 16px; border-radius: 14px; background: rgba(255, 255, 255, 0.7); }}
+    .meter-bar {{ height: 10px; border-radius: 999px; background: rgba(29, 36, 48, 0.08); overflow: hidden; }}
+    .meter-fill {{ width: 0%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.4s ease; }}
+    .status {{ margin: 12px 0 0; min-height: 1.4em; color: var(--muted); font: 500 14px/1.5 var(--ui-family); }}
+    .status.ok {{ color: var(--ok); }} .status.err {{ color: var(--err); }}
+    .hud {{ display: flex; gap: 24px; margin-bottom: 16px; padding: 12px 16px; background: rgba(255, 255, 255, 0.8); border-radius: 10px; font: 600 13px/1 var(--ui-family); }}
+    .hud-item {{ display: flex; align-items: center; gap: 6px; }} .hud-label {{ color: var(--muted); }} .hud-value {{ color: var(--accent); font-size: 16px; }}
+    .submit-btn {{ display: none; margin-top: 20px; width: 100%; padding: 16px 24px; border: 0; border-radius: 12px; background: var(--text); color: white; font: 700 15px/1 var(--ui-family); cursor: pointer; }}
+    .submit-btn:disabled {{ opacity: 0.6; cursor: not-allowed; }}
+    .retry-btn {{ display: none; margin-top: 12px; padding: 12px 20px; border: 2px solid var(--border); border-radius: 10px; background: white; color: var(--text); font: 600 13px/1 var(--ui-family); cursor: pointer; }}
+    .seal {{ margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font: 500 12px/1.6 var(--ui-family); text-align: center; }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <p class="eyebrow">Human Verification</p>
+    <h1>Prove you're human</h1>
+    <p class="lede">Complete the challenges below. We analyze interaction patterns to detect bots vs humans.</p>
+    <div class="challenge-area">
+      <div class="hud">
+        <div class="hud-item"><span class="hud-label">Targets:</span><span class="hud-value" id="hitCount">0/5</span></div>
+        <div class="hud-item"><span class="hud-label">Typing:</span><span class="hud-value" id="typingStatus">--</span></div>
+        <div class="hud-item"><span class="hud-label">Progress:</span><span class="hud-value" id="progressPercent">0%</span></div>
+      </div>
+      <div class="target-game" id="targetGame"></div>
+      <div class="typing-area">
+        <div class="typing-prompt" id="typingPrompt">Type the phrase below</div>
+        <input type="text" class="typing-input" id="typingInput" placeholder="Start typing..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      </div>
+    </div>
+    <div class="meter">
+      <div class="meter-bar"><div class="meter-fill" id="progressBar"></div></div>
+      <p class="status" id="statusText">Click targets to begin...</p>
+    </div>
+    <button class="submit-btn" id="submitBtn" disabled>Verifying...</button>
+    <button class="retry-btn" id="retryBtn" onclick="location.reload()">Try again</button>
+    <div class="seal">Protected by SinkHole Behavioral Analysis. Bots redirected to decoy.</div>
+  </main>
+<script>
+(async () => {{
+  const SESSION_ID = {sid_js}, CHALLENGE_TOKEN = {token_js}, RETURN_TO = {return_js};
+  const state = {{ hits: 0, targetHitsRequired: 5, typingComplete: false, targetProgress: 0, typingProgress: 0, mousePoints: [], keystrokes: [], clickEvents: [], startTime: Date.now(), typingStartTime: 0 }};
+  const targetGame = document.getElementById('targetGame'), typingInput = document.getElementById('typingInput'), hitCount = document.getElementById('hitCount'), typingStatus = document.getElementById('typingStatus'), progressPercent = document.getElementById('progressPercent'), progressBar = document.getElementById('progressBar'), statusText = document.getElementById('statusText'), submitBtn = document.getElementById('submitBtn'), retryBtn = document.getElementById('retryBtn'), typingPrompt = document.getElementById('typingPrompt');
+  const phrases = ["The quick brown fox jumps over the lazy dog", "Pack my box with five dozen liquor jugs", "Sphinx of black quartz judge my vow"];
+  const targetPhrase = phrases[Math.floor(Math.random() * phrases.length)];
+  typingPrompt.textContent = 'Type: "' + targetPhrase + '"';
+  document.addEventListener('mousemove', (e) => {{ state.mousePoints.push({{ x: e.clientX, y: e.clientY, t: Date.now() - state.startTime }}); if (state.mousePoints.length > 200) state.mousePoints.shift(); }}, {{ passive: true }});
+  function spawnTarget() {{
+    if (state.hits >= state.targetHitsRequired) return;
+    const target = document.createElement('div'); target.className = 'target'; target.textContent = state.hits + 1;
+    const gameRect = targetGame.getBoundingClientRect(), margin = 60;
+    let x = margin + Math.random() * (gameRect.width - margin * 2), y = margin + Math.random() * (gameRect.height - margin * 2);
+    target.style.left = x + 'px'; target.style.top = y + 'px';
+    let hit = false; const spawnTime = Date.now();
+    const moveInterval = setInterval(() => {{ if (hit || state.hits >= state.targetHitsRequired) {{ clearInterval(moveInterval); return; }} x += (Math.random() - 0.5) * 30; y += (Math.random() - 0.5) * 30; x = Math.max(margin, Math.min(gameRect.width - margin, x)); y = Math.max(margin, Math.min(gameRect.height - margin, y)); target.style.left = x + 'px'; target.style.top = y + 'px'; }}, 400);
+    target.addEventListener('mousedown', (e) => {{ if (hit) return; hit = true; clearInterval(moveInterval); const hitTime = Date.now(); state.hits++; state.targetProgress = (state.hits / state.targetHitsRequired) * 50; state.clickEvents.push({{ target_num: state.hits, spawn_time: spawnTime - state.startTime, hit_time: hitTime - state.startTime, duration: hitTime - spawnTime, x: e.clientX, y: e.clientY }}); target.classList.add('hit'); setTimeout(() => target.remove(), 200); updateUI(); if (state.hits < state.targetHitsRequired) {{ setTimeout(spawnTarget, 400); }} else {{ state.typingStartTime = Date.now(); typingInput.focus(); statusText.textContent = "Great! Now type..."; statusText.className = "status ok"; }} }});
+    targetGame.appendChild(target);
+  }}
+  typingInput.addEventListener('keydown', (e) => {{ const now = Date.now(); if (!state.typingStartTime) state.typingStartTime = now; state.keystrokes.push({{ key: e.key, press_time: now - state.startTime }}); }});
+  typingInput.addEventListener('keyup', (e) => {{ const now = Date.now(); const lastStroke = state.keystrokes[state.keystrokes.length - 1]; if (lastStroke && lastStroke.key === e.key) {{ lastStroke.release_time = now - state.startTime; lastStroke.dwell = lastStroke.release_time - lastStroke.press_time; }} }});
+  typingInput.addEventListener('input', (e) => {{ const value = e.target.value; const progress = Math.min(1, value.length / targetPhrase.length); state.typingProgress = progress * 50; if (value === targetPhrase) {{ state.typingComplete = true; typingInput.classList.add('complete'); typingInput.disabled = true; typingStatus.textContent = "Done!"; statusText.textContent = "Submitting..."; statusText.className = "status ok"; submitVerification(); }} else if (targetPhrase.startsWith(value)) {{ typingStatus.textContent = Math.floor(progress * 100) + "%"; typingInput.classList.remove('error'); }} else {{ typingStatus.textContent = "Fix typo"; typingInput.classList.add('error'); }} updateUI(); }});
+  function updateUI() {{ hitCount.textContent = state.hits + '/' + state.targetHitsRequired; progressPercent.textContent = Math.floor(state.targetProgress + state.typingProgress) + '%'; progressBar.style.width = (state.targetProgress + state.typingProgress) + '%'; }}
+  async function submitVerification() {{
+    submitBtn.style.display = 'block'; submitBtn.disabled = true; submitBtn.textContent = 'Analyzing...';
+    
+    // Collect environment data for bot detection
+    const envData = await collectEnv();
+    
+    const behavioralData = {{ mouse_data: {{ points: state.mousePoints.slice(-100), click_events: state.clickEvents }}, keystrokes: state.keystrokes, timing: {{ total_duration_ms: Date.now() - state.startTime, target_phase_ms: state.typingStartTime - state.startTime, typing_phase_ms: Date.now() - state.typingStartTime }} }};
+    try {{
+      const resp = await fetch('/bw/gate/verify', {{ method: 'POST', headers: {{ 'content-type': 'application/json' }}, body: JSON.stringify({{ schema_version: '2.0', session_id: SESSION_ID, challenge_token: CHALLENGE_TOKEN, behavioral_data: behavioralData, env: envData, return_to: RETURN_TO }}), credentials: 'same-origin' }});
+      if (!resp.ok) {{ const errorData = await resp.json().catch(() => ({{}})); if (errorData.decision === 'decoy' && errorData.next_path) {{ location.replace(errorData.next_path); return; }} throw new Error(errorData.detail || 'Failed'); }}
+      const result = await resp.json();
+      if (result.decision === 'allow') {{ submitBtn.textContent = 'Verified!'; setTimeout(() => location.replace(result.next_path || RETURN_TO), 500); }} else if (result.next_path) {{ location.replace(result.next_path); }}
+    }} catch (err) {{ submitBtn.textContent = 'Error'; submitBtn.disabled = false; statusText.textContent = err.message || 'Failed. Retry.'; statusText.className = 'status err'; retryBtn.style.display = 'inline-block'; }}
+  }}
+  
+  // Environment collection for automation detection
+  async function collectEnv() {{
+    const report = {{}};
+    try {{ report.webdriver = navigator.webdriver; }} catch (_) {{}}
+    try {{ report.plugins = navigator.plugins?.length || 0; }} catch (_) {{}}
+    try {{ report.languages = navigator.languages; }} catch (_) {{}}
+    try {{ report.hardware_concurrency = navigator.hardwareConcurrency; }} catch (_) {{}}
+    try {{ report.device_memory = navigator.deviceMemory; }} catch (_) {{}}
+    try {{ report.screen_width = screen.width; }} catch (_) {{}}
+    try {{ report.screen_height = screen.height; }} catch (_) {{}}
+    try {{ report.platform = navigator.platform; }} catch (_) {{}}
+    try {{ 
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl');
+      if (gl) {{ report.renderer = gl.getParameter(gl.RENDERER); report.vendor = gl.getParameter(gl.VENDOR); }}
+    }} catch (_) {{}}
+    // Automation globals check
+    const automationGlobals = ['__webdriver_script_fn', 'cdc_adoQpoasnfa76pfcZLmcfl_', '__playwright', '__pw_manual', '__PW_EVALUATE', '__firecrawl', 'firecrawl_id'];
+    report.js_globals = [];
+    for (const g of automationGlobals) {{ try {{ if (window[g]) report.js_globals.push(g); }} catch (_) {{}} }}
+    return report;
+  }}
+  
+  spawnTarget();
+}})();
+</script>
+</body>
+</html>"""
+

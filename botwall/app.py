@@ -14,6 +14,7 @@ from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
 from .html import (
+    render_behavioral_challenge_page,
     render_challenge_page,
     render_dashboard,
     render_decoy_page,
@@ -484,80 +485,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/bw/gate/challenge")
     async def bw_gate_challenge(request: Request, path: str = "/") -> HTMLResponse:
         """
-        Serve the PoW challenge page.
-        The page JS auto-starts solving; no user click needed.
-        Submit solution to /bw/gate/verify → gate cookie is set → redirect to `path`.
+        Serve the behavioral CAPTCHA challenge page (replaces PoW).
+        Interactive mouse/typing analysis to distinguish humans from bots.
         """
         session_id = _get_session_id(request, cfg)
-        client_ip  = _client_ip(request)
-        ip_hash    = hash_client_ip(client_ip, cfg.secret_key)
-        ip_rep     = request.headers.get("x-ip-reputation", "unknown")
-        session    = store.store.load_session(session_id, ip_hash)
-        failures   = int(session.get("gate_failures", 0))
-        difficulty = (
-            cfg.pow_elevated_difficulty
-            if ip_rep == "bad" or failures >= 2
-            else cfg.pow_default_difficulty
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        
+        # Issue a simple challenge token for replay protection
+        from .crypto import sign_json
+        challenge_token = sign_json(
+            {"t": "captcha", "sid": session_id, "iph": ip_hash, "exp": now_ts() + 300},
+            cfg.secret_key,
         )
-        pow_challenge = issue_pow_challenge(
-            secret=cfg.secret_key,
+        
+        page = render_behavioral_challenge_page(
             session_id=session_id,
-            ip_hash=ip_hash,
-            difficulty=difficulty,
-            ttl_seconds=cfg.pow_max_solve_seconds + 5,
-        )
-        page = render_gate_challenge_page(
-            session_id=session_id,
-            challenge_token=pow_challenge.challenge_token,
-            challenge=pow_challenge.challenge,
-            difficulty=difficulty,
+            challenge_token=challenge_token,
             return_to=path,
         )
         response = HTMLResponse(page)
         response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True, samesite="lax", path="/")
         return response
 
-    @app.post("/bw/gate/verify", response_model=GateVerifyResponse)
-    async def bw_gate_verify(payload: GateVerifyRequest, request: Request) -> Response:
+    @app.post("/bw/gate/verify")
+    async def bw_gate_verify(request: Request) -> Response:
         """
-        Validate PoW solution and browser env report.
-        Success → issues bw_gate cookie, returns {next_path} JSON for JS redirect.
-        Hard-fail (webdriver detected) → 403 HTML with elevated re-challenge.
+        Verify behavioral CAPTCHA submission.
+        Analyzes mouse patterns, keystroke dynamics, and timing.
+        Bot detected → redirect to decoy. Human → gate cookie issued.
         """
-        client_ip  = _client_ip(request)
-        ip_hash    = hash_client_ip(client_ip, cfg.secret_key)
-        now        = now_ts()
-        session_id = payload.session_id
-        session    = store.store.load_session(session_id, ip_hash)
-
-        # 1. PoW verification
+        body = await request.body()
         try:
-            pow_result = verify_pow_solution(
-                challenge_token=payload.challenge_token,
-                secret=cfg.secret_key,
-                session_id=session_id,
-                ip_hash=ip_hash,
-                challenge=payload.challenge,
-                nonce=payload.nonce,
-                submitted_hash=payload.hash,
-                solve_ms=int(payload.solve_ms),
-                max_solve_seconds=cfg.pow_max_solve_seconds,
-            )
-        except TokenError as exc:
-            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
-            store.store.save_session(session)
-            raise HTTPException(status_code=400, detail=f"PoW failed: {exc}") from exc
-
-        # Anti-replay: one gate token per challenge
-        if not store.store.mark_once("gate_jti", pow_result.challenge_id, cfg.gate_ttl_seconds):
-            raise HTTPException(status_code=409, detail="challenge replay detected")
-
-        # 2. Environment scoring
-        env_dict = payload.env.model_dump()
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="invalid JSON")
+        
+        session_id = data.get("session_id")
+        behavioral_data = data.get("behavioral_data", {})
+        return_to = data.get("return_to", "/")
+        env_report = data.get("env", {})
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="missing session_id")
+        
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        session = store.store.load_session(session_id, ip_hash)
+        now = now_ts()
+        
+        # First: check environment signals for hard-fail automation markers
+        env_dict = env_report if isinstance(env_report, dict) else {}
         ua = request.headers.get("user-agent", "")
         env_score, env_reasons, hard_fail = score_gate_environment(env_dict, request_user_agent=ua)
-
-        # 3. Hard fail: redirect to decoy hellhole immediately (silent poisoning)
+        
+        # Hard fail: automation detected in env report → immediate decoy
         if hard_fail:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
             session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
@@ -565,67 +547,131 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _record_decision(session, "decoy", env_reasons)
             store.store.save_session(session)
             
-            # Redirect to decoy hellhole for silent data poisoning
-            # Use node_id based on session hash for consistency
             node_id = hash(session_id) % cfg.decoy_max_nodes
-            response = RedirectResponse(
-                url=f"/bw/decoy/{node_id}?sid={session_id}&caught=1", 
-                status_code=302
-            )
-            response.headers["x-botwall-decision"] = "decoy"
-            response.headers["x-botwall-reasons"] = ",".join(env_reasons[-6:])
-            _attach_cookie(response, cfg, session_id)
-            return response
+            return JSONResponse({
+                "decision": "decoy",
+                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1",
+                "reasons": env_reasons,
+            }, status_code=403)
         
-        # 3b. Elevated suspicion: also block with elevated challenge
-        if env_score <= -50:
+        # Score behavioral patterns
+        from .behavioral import (
+            score_advanced_mouse_patterns,
+            score_advanced_keystrokes,
+        )
+        
+        total_score = float(env_score)  # Start with env score
+        all_reasons = list(env_reasons)
+        all_risks: list[str] = []
+        
+        # Score mouse patterns
+        mouse_data = behavioral_data.get("mouse_data", {})
+        if mouse_data:
+            mouse_result = score_advanced_mouse_patterns(mouse_data)
+            total_score += mouse_result.delta
+            all_reasons.extend(mouse_result.reasons)
+            all_risks.extend(mouse_result.risk_flags)
+        
+        # Score keystrokes
+        keystrokes = behavioral_data.get("keystrokes", [])
+        if keystrokes:
+            keystroke_result = score_advanced_keystrokes(keystrokes)
+            total_score += keystroke_result.delta
+            all_reasons.extend(keystroke_result.reasons)
+            all_risks.extend(keystroke_result.risk_flags)
+        
+        # Check timing anomalies
+        timing = behavioral_data.get("timing", {})
+        total_duration = timing.get("total_duration_ms", 0)
+        
+        # Too fast = bot (impossible for human to complete)
+        if total_duration > 0 and total_duration < 2000:
+            total_score -= 30
+            all_reasons.append("captcha:impossible_speed")
+            all_risks.append("IMPOSSIBLE_SPEED")
+        
+        # Perfectly consistent timing = robotic
+        if keystrokes and len(keystrokes) > 5:
+            dwell_times = [k.get("dwell", 0) for k in keystrokes if k.get("dwell")]
+            if dwell_times and len(dwell_times) > 1:
+                import statistics
+                mean_dwell = statistics.mean(dwell_times)
+                if mean_dwell > 0:
+                    cv = statistics.pstdev(dwell_times) / mean_dwell
+                    if cv < 0.1:  # Too consistent
+                        total_score -= 25
+                        all_reasons.append("captcha:robotic_timing")
+                        all_risks.append("ROBOTIC_TIMING")
+        
+        # Check for missing/insufficient behavioral data (bot didn't interact)
+        if not mouse_data or len(mouse_data.get("points", [])) < 10:
+            total_score -= 20
+            all_reasons.append("captcha:insufficient_mouse_data")
+            all_risks.append("NO_MOUSE_MOVEMENT")
+        
+        if not keystrokes or len(keystrokes) < 5:
+            total_score -= 20
+            all_reasons.append("captcha:insufficient_keystrokes")
+            all_risks.append("NO_TYPING")
+        
+        # BOT DETECTION: negative score or critical risk flags → decoy
+        is_bot = (
+            total_score < -20 
+            or "MOUSE_TELEPORT" in all_risks 
+            or "ROBOTIC_TYPING" in all_risks
+            or "INSTANT_TYPING" in all_risks
+            or "NO_MOUSE_MOVEMENT" in all_risks
+            or "IMPOSSIBLE_SPEED" in all_risks
+        )
+        
+        if is_bot:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).extend(all_reasons)
+            _record_decision(session, "decoy", all_reasons)
             store.store.save_session(session)
-            elevated = issue_pow_challenge(
-                secret=cfg.secret_key,
-                session_id=session_id,
-                ip_hash=ip_hash,
-                difficulty=cfg.pow_elevated_difficulty,
-                ttl_seconds=cfg.pow_max_solve_seconds + 5,
-            )
-            blocked_page = render_gate_blocked_page(
-                session_id=session_id,
-                challenge_token=elevated.challenge_token,
-                challenge=elevated.challenge,
-                difficulty=cfg.pow_elevated_difficulty,
-                return_to=payload.return_to,
-                reasons=env_reasons,
-            )
-            return HTMLResponse(content=blocked_page, status_code=403)
-
-        # 4. Issue gate token
+            
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            return JSONResponse({
+                "decision": "decoy",
+                "score": total_score,
+                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1",
+                "reasons": all_reasons,
+                "risks": all_risks,
+            }, status_code=403)
+        
+        # HUMAN VERIFIED: issue gate token
         gate_token = issue_gate_token(
             secret=cfg.secret_key,
             session_id=session_id,
             ip_hash=ip_hash,
-            solved_difficulty=pow_result.difficulty,
-            env_score=env_score,
+            solved_difficulty=1,
+            env_score=int(total_score),
             ttl_seconds=cfg.gate_ttl_seconds,
         )
-        session["gate_passed_at"]  = now
-        session["gate_env_score"]  = env_score
-        session["gate_difficulty"] = pow_result.difficulty
-        session["gate_failures"]   = 0
+        
+        session["gate_passed_at"] = now
+        session["gate_env_score"] = int(total_score)
+        session["gate_failures"] = 0
+        session["behavioral_captcha_passed"] = True
+        _record_decision(session, "allow", all_reasons)
         store.store.save_session(session)
-
-        resp_data = GateVerifyResponse(
-            session_id=session_id,
-            decision="allow",
-            env_score=env_score,
-            next_path=payload.return_to or "/",
-            gate_expires_at=now + cfg.gate_ttl_seconds,
-            reasons=env_reasons,
+        
+        response = JSONResponse({
+            "decision": "allow",
+            "score": total_score,
+            "next_path": return_to,
+            "gate_expires_at": now + cfg.gate_ttl_seconds,
+            "reasons": all_reasons,
+        })
+        response.set_cookie(
+            key=cfg.gate_cookie,
+            value=gate_token,
+            httponly=True,
+            samesite="lax",
+            max_age=cfg.gate_ttl_seconds,
+            path="/",
         )
-        response = JSONResponse(resp_data.model_dump(mode="json"))
-        response.set_cookie(key=cfg.gate_cookie, value=gate_token, httponly=True,
-                            samesite="lax", max_age=cfg.gate_ttl_seconds, path="/")
-        response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True,
-                            samesite="lax", path="/")
         return response
 
     @app.get("/bw/gate/check")
