@@ -876,13 +876,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             all_risks.append("NO_TYPING")
         
         # BOT DETECTION: negative score or critical risk flags → decoy
+        # AGGRESSIVE: Lowered threshold from -20 to -10 for better bot catching
         is_bot = (
-            total_score < -20 
+            total_score < -10 
             or "MOUSE_TELEPORT" in all_risks 
             or "ROBOTIC_TYPING" in all_risks
             or "INSTANT_TYPING" in all_risks
             or "NO_MOUSE_MOVEMENT" in all_risks
             or "IMPOSSIBLE_SPEED" in all_risks
+            or "CONSTANT_VELOCITY" in all_risks
         )
         
         if is_bot:
@@ -1471,6 +1473,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "telemetry": {"enabled": cfg.telemetry_enabled},
             "store_backend": store.backend,
         })
+
+    @app.get("/dashboard")
+    async def dashboard(request: Request) -> HTMLResponse:
+        """Beautiful botwall dashboard with metrics and behavior analysis."""
+        session_id = _get_session_id(request, cfg)
+        snapshot = _build_operator_telemetry_snapshot(store)
+        response = HTMLResponse(render_dashboard(snapshot))
+        _attach_cookie(response, cfg, session_id)
+        return response
 
     @app.get("/")
     async def home(request: Request) -> Response:

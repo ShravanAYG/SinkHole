@@ -348,6 +348,7 @@ def score_advanced_mouse_patterns(
 ) -> BehavioralScoreOutcome:
     """
     Score advanced mouse movement patterns.
+    Calculates velocities from points if not provided.
     """
     reasons: list[str] = []
     risk_flags: list[str] = []
@@ -355,6 +356,18 @@ def score_advanced_mouse_patterns(
 
     points = mouse_data.get("points", [])
     velocities = mouse_data.get("velocities", [])
+    
+    # Calculate velocities from points if not provided
+    if not velocities and len(points) >= 2:
+        for i in range(1, len(points)):
+            p1 = points[i-1]
+            p2 = points[i]
+            dx = p2.get("x", 0) - p1.get("x", 0)
+            dy = p2.get("y", 0) - p1.get("y", 0)
+            dt = p2.get("t", 0) - p1.get("t", 0)
+            if dt > 0:
+                velocity = math.sqrt(dx*dx + dy*dy) / dt
+                velocities.append(velocity)
 
     if len(points) >= 3:
         analyzer = MousePatternAnalyzer()
