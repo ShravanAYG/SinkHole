@@ -51,7 +51,7 @@ server {{
             return 302 {api_url}/bw/challenge?path=$uri;
         }}
         if ($bw_decision = decoy) {{
-            return 302 {api_url}/bw/decoy/0;
+            return 302 {api_url}/content/archive/0;
         }}
 
         proxy_pass http://botwall_api;
@@ -73,7 +73,7 @@ CADDYFILE_TEMPLATE = """\
     redir @challenge {api_url}/bw/challenge?path={{uri}}
 
     @decoy header X-Botwall-Decision decoy
-    redir @decoy {api_url}/bw/decoy/0
+    redir @decoy {api_url}/content/archive/0
 
     reverse_proxy {api_host}:{api_port}
 }}
@@ -102,7 +102,7 @@ local http = require("socket.http")
 
 BOTWALL_CHECK_URL  = "{api_url}/bw/check"
 BOTWALL_CHALLENGE  = "{api_url}/bw/challenge"
-BOTWALL_DECOY      = "{api_url}/bw/decoy/0"
+BOTWALL_DECOY      = "{api_url}/content/archive/0"
 
 function botwall_access_checker(r)
     local req = {{

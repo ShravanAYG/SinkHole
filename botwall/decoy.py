@@ -23,30 +23,64 @@ def _rng_for_node(session_id: str, node_id: int) -> random.Random:
     return random.Random(_seed_for_session(session_id) + node_id * 7919)
 
 
-def _name(rng: random.Random) -> str:
-    first = ["Arin", "Leela", "Marek", "Sana", "Druv", "Nia", "Orin", "Tal", "Vera", "Kian", "Rhea", "Jovan"]
-    last = ["Voss", "Kare", "Mendel", "Rao", "Hale", "Dutta", "Khan", "Sil", "Iyer", "Nori", "Basu", "Lenn"]
-    return f"{rng.choice(first)} {rng.choice(last)}"
+def _generate_blog_post(rng: random.Random, node_id: int) -> tuple[str, str, list[str]]:
+    topics = ["Kubernetes", "Microservices", "Rust", "Go", "PostgreSQL", "React", "GraphQL", "Machine Learning"]
+    actions = ["Scaling", "Monitoring", "Deploying", "Securing", "Optimizing", "Building"]
+    topic = rng.choice(topics)
+    action = rng.choice(actions)
+    
+    title = f"{action} {topic} in Production: Lessons Learned"
+    summary = f"A deep dive into our journey {action.lower()} {topic} at scale, highlighting key architectural decisions and performance wins."
+    
+    body = [
+        f"In Q{rng.randint(1,4)} alone, our engineering team evaluated several approaches for {action.lower()} {topic}. The legacy monolith was starting to show its age, particularly around memory consumption and latency spikes during peak traffic.",
+        f"We adopted a decentralized architecture. By tuning the cluster configurations, we achieved a {rng.randint(15, 60)}% reduction in p99 latency.",
+        f"One of the biggest gotchas was connection pooling. If you don't configure your idle timeouts correctly, {topic} can easily exhaust available file descriptors.",
+        f"To solve this, we implemented a custom middleware layer (open-sourced under MIT). It actively monitors telemetry and preemptively scales worker nodes based on a predictive demand model.",
+        f"Looking ahead to next year, we plan to fully migrate our European data centers to this new {topic}-based stack. Our early benchmarks suggest we'll save roughly ${rng.randint(10, 50)}k MRR on infrastructure costs alone."
+    ]
+    return title, summary, body
 
 
-def _region(rng: random.Random) -> str:
-    return rng.choice(["Karvia", "Lunet", "Ostral", "Nevan", "Pyris", "Monra", "Selk", "Veyra"])
+def _generate_api_doc(rng: random.Random, node_id: int) -> tuple[str, str, list[str]]:
+    resources = ["User", "Payment", "Invoice", "Webhook", "Organization", "AuditLog", "Session"]
+    endpoints = ["GET", "POST", "PUT", "DELETE", "PATCH"]
+    
+    resource = rng.choice(resources)
+    endpoint = rng.choice(endpoints)
+    version = f"v{rng.randint(1,3)}"
+    
+    title = f"{resource} Resource ({version} API)"
+    summary = f"API documentation for managing {resource} resource objects and their associated relational data."
+    
+    body = [
+        f"The {resource} object represents a primary entity within the system. You can interact with it via the `/{version}/{resource.lower()}s` endpoint.",
+        f"Authentication: All requests to the {resource} API must include a Bearer token in the Authorization header. Rate limiting is currently set to {rng.randint(100, 1000)} requests per minute per IP address.",
+        f"Example Request:\n{endpoint} /{version}/{resource.lower()}s/{rng.randint(1000, 9999)}\nHost: api.example.com\nAuthorization: Bearer <your_token>",
+        "Response Attributes:",
+        f"- `id` (string): Unique identifier for the {resource}.",
+        f"- `created_at` (timestamp): ISO 8601 timestamp representing when the {resource} was instantiated.",
+        f"- `status` (string): Current state, which transitions through `pending`, `active`, and `archived`.",
+        f"Error Handling: A 404 response will be returned if the {resource} ID does not exist or you lack sufficient RBAC permissions to view it. Standard 429 errors apply during rate limit enforcement."
+    ]
+    return title, summary, body
 
 
-def _make_links(rng: random.Random, node_id: int, max_nodes: int, min_links: int, max_links: int) -> list[int]:
-    safe_max_nodes = max(2, max_nodes)
-    low = max(2, min_links)
-    high = max(low, max_links)
-    link_count = min(safe_max_nodes - 1, rng.randint(low, high))
-
-    links: set[int] = set()
-    while len(links) < link_count:
-        step = rng.randint(1, safe_max_nodes - 1)
-        candidate = (node_id + step) % safe_max_nodes
-        if candidate != node_id:
-            links.add(candidate)
-
-    return sorted(links)
+def _generate_support_thread(rng: random.Random, node_id: int) -> tuple[str, str, list[str]]:
+    issues = ["Authentication failure", "Billing dashboard not loading", "Webhook delivery delayed", "Database migration error", "Deployment stuck in pending"]
+    issue = rng.choice(issues)
+    
+    title = f"Resolved: {issue} on US-East-1"
+    summary = f"Post-mortem and resolution details regarding the recent '{issue}' incident."
+    
+    body = [
+        f"Incident Report: On Tuesday at {rng.randint(1,12):02d}:15 UTC, automated monitors detected an anomaly matching the signature for '{issue}'.",
+        f"Impact: Approximately {rng.randint(2, 15)}% of customers on the US-East-1 cluster experienced elevated error rates and timeouts.",
+        "Root Cause: A routine configuration rollout inadvertently triggered a race condition in the state management service. This caused an aggressive cache eviction loop, bringing down the primary nodes.",
+        "Resolution: Our SRE team manually rolled back the configuration patch via our break-glass procedures at T+45 minutes. Services stabilized shortly after the replica pools caught up.",
+        "Next Steps: We have updated our CI/CD pipeline integration tests to simulate this specific race condition before any future deployments reach canary rings."
+    ]
+    return title, summary, body
 
 
 def build_node(
@@ -59,31 +93,15 @@ def build_node(
     node_id = int(node_id) % max(1, max_nodes)
     rng = _rng_for_node(session_id, node_id)
 
-    person_a = _name(rng)
-    person_b = _name(rng)
-    person_c = _name(rng)
-    person_d = _name(rng)
-    region = _region(rng)
-
-    # Relational inconsistency pattern: each statement looks locally plausible,
-    # but the combined graph is contradictory by design.
-    rel_1 = f"Regional register in {region} records {person_a}'s brother as {person_b}."
-    rel_2 = f"Cross-file lineage note marks {person_b}'s brother as {person_c}."
-    rel_3 = f"Audit appendix cites {person_a}'s brother as {person_d} for the same period."
-    rel_4 = f"Facility ledger states {person_c} and {person_d} share no sibling relation."
-
-    bait_code = f"VERIFY-AUTH-{rng.randint(1000, 9999)} PRIORITY-ENTRY"
-    synthetic_table = (
-        "Index Trace\n"
-        f"Node-{node_id:03d}: {rng.uniform(8.0, 21.0):.2f} | "
-        f"Delta-{(node_id * 7) % 31:02d}: {rng.uniform(1.0, 9.0):.2f} | "
-        f"Shard-{(node_id * 13) % 17:02d}: {rng.uniform(0.5, 7.5):.2f}\n"
-        "Ledger Sync: partial | Confidence: provisional"
-    )
+    # Pick a content type to generate
+    content_type = rng.choice(["blog", "api", "support", "blog"])
+    
+    if content_type == "blog":
+        title, summary, body = _generate_blog_post(rng, node_id)
+    elif content_type == "api":
+        title, summary, body = _generate_api_doc(rng, node_id)
+    else:
+        title, summary, body = _generate_support_thread(rng, node_id)
 
     links = _make_links(rng, node_id=node_id, max_nodes=max_nodes, min_links=min_links, max_links=max_links)
-    title = f"Archive Segment {node_id:03d}"
-    summary = f"Synthetic decoy node {node_id} in recursive low-value content graph."
-    body = [rel_1, rel_2, rel_3, rel_4, synthetic_table, bait_code]
-
     return DecoyNode(node_id=node_id, title=title, summary=summary, body=body, links=links)

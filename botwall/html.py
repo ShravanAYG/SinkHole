@@ -1460,7 +1460,7 @@ def render_challenge_page(*, session_id: str, token: str, nonce: str, target_pat
 
 def render_decoy_page(node: DecoyNode, session_id: str) -> str:
     links_html = "".join(
-        f'<li><a href="/bw/decoy/{child}?sid={html.escape(session_id)}">Related archive {child:03d}</a></li>'
+        f'<li><a href="/content/archive/{child}?ref={html.escape(session_id[:8])}">Related archive {child:03d}</a></li>'
         for child in node.links
     )
     body_html = "".join(f"<p>{html.escape(line)}</p>" for line in node.body)

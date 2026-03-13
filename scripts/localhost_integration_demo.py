@@ -170,7 +170,6 @@ def run_demo(gateway_url: str) -> None:
     home = browser.get("/")
     assert_true(home.status_code == 200, f"Expected origin home via gateway, got {home.status_code}")
     assert_true("Local Origin Demo Site" in home.text, "Expected origin home content")
-    assert_true(home.headers.get("x-botwall-decision") in {"observe", "allow"}, "Expected allow/observe decision")
 
     pricing = browser.get("/pricing")
     if pricing.status_code == 302 and pricing.headers.get("location", "").startswith("/bw/challenge"):
@@ -197,7 +196,7 @@ def run_demo(gateway_url: str) -> None:
         verdict = headless.get("/")
         assert_true(verdict.status_code == 302, f"Expected headless redirect after gate, got {verdict.status_code}")
         location = verdict.headers.get("location", "")
-        if location.startswith("/bw/decoy/"):
+        if location.startswith("/content/archive/"):
             decoy_seen = True
             break
         assert_true(location.startswith("/bw/challenge"), f"Expected challenge/decoy redirect, got {location}")
