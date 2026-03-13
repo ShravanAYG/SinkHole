@@ -1,10 +1,27 @@
 import json
 
 
-def render_js_verify_page(*, session_id: str, path: str) -> str:
-    """Lightweight JS verification - runs browser env checks."""
+def render_js_verify_page(
+    *,
+    session_id: str,
+    path: str,
+    challenge: str,
+    challenge_token: str,
+    difficulty: int,
+) -> str:
+    """JS verification page with Proof-of-Work challenge.
+    
+    The browser must:
+    1. Run environment checks
+    2. Solve a SHA-256 Proof-of-Work puzzle (find nonce where hash has N leading zeros)
+    3. Submit both the PoW solution and env check results to /bw/js-verify
+    
+    This makes scraping expensive — each page load costs 2-5 seconds of real CPU time.
+    """
     sid_js = json.dumps(session_id)
     path_js = json.dumps(path)
+    challenge_js = json.dumps(challenge)
+    token_js = json.dumps(challenge_token)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -24,6 +41,7 @@ def render_js_verify_page(*, session_id: str, path: str) -> str:
     .status {{ margin-top:1rem; padding:0.75rem; border-radius:8px; font-size:0.85rem; display:none; }}
     .status.ok {{ display:block; background:rgba(34,197,94,0.15); color:var(--ok); }}
     .status.err {{ display:block; background:rgba(239,68,68,0.15); color:var(--err); }}
+    .progress {{ margin-top:0.5rem; color:var(--muted); font-size:0.8rem; }}
   </style>
 </head>
 <body>
@@ -31,62 +49,90 @@ def render_js_verify_page(*, session_id: str, path: str) -> str:
     <div class="spinner" id="spinner"></div>
     <h1 id="title">Verifying browser...</h1>
     <p id="subtitle">Please wait while we confirm you're human</p>
+    <div class="progress" id="progress"></div>
     <div class="status" id="status"></div>
   </div>
 <script>
 (async () => {{
   const SESSION_ID = {sid_js};
   const RETURN_PATH = {path_js};
+  const CHALLENGE = {challenge_js};
+  const CHALLENGE_TOKEN = {token_js};
+  const DIFFICULTY = {difficulty};
   const statusEl = document.getElementById('status');
   const titleEl = document.getElementById('title');
   const subtitleEl = document.getElementById('subtitle');
   const spinnerEl = document.getElementById('spinner');
+  const progressEl = document.getElementById('progress');
   
-  // Run browser verification checks
-  async function runChecks() {{
+  // SHA-256 Proof-of-Work solver
+  async function solvePoW(challenge, difficulty) {{
+    const target = '0'.repeat(difficulty);
+    const encoder = new TextEncoder();
+    let nonce = 0;
+    const startTime = performance.now();
+    
+    while (true) {{
+      const hexNonce = nonce.toString(16);
+      const data = encoder.encode(challenge + hexNonce);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      
+      if (hashHex.startsWith(target)) {{
+        const solveMs = Math.round(performance.now() - startTime);
+        return {{ nonce: hexNonce, hash: hashHex, solveMs }};
+      }}
+      
+      nonce++;
+      
+      // Update progress every 10000 iterations
+      if (nonce % 10000 === 0) {{
+        progressEl.textContent = 'Computing: ' + nonce.toLocaleString() + ' iterations...';
+        // Yield to the event loop so the UI updates
+        await new Promise(r => setTimeout(r, 0));
+      }}
+    }}
+  }}
+
+  // Run browser environment checks
+  function runChecks() {{
     const checks = {{ passed: 0, failed: 0, details: [] }};
     
-    // Check 1: window and document exist
     try {{ 
       if (typeof window !== 'undefined' && typeof document !== 'undefined') {{
         checks.passed++; checks.details.push('window_ok');
       }} else {{ checks.failed++; checks.details.push('window_fail'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('window_error'); }}
     
-    // Check 2: navigator properties
     try {{
       const nav = navigator;
       if (nav.userAgent && nav.language && nav.platform) {{
         checks.passed++; checks.details.push('navigator_ok');
       }} else {{ checks.failed++; checks.details.push('navigator_fail'); }}
-      // Check webdriver (automation marker)
       if (nav.webdriver === true) {{
         checks.failed++; checks.details.push('webdriver_detected');
       }} else {{ checks.passed++; checks.details.push('no_webdriver'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('navigator_error'); }}
     
-    // Check 3: screen properties
     try {{
       if (screen.width > 0 && screen.height > 0 && screen.colorDepth >= 24) {{
         checks.passed++; checks.details.push('screen_ok');
       }} else {{ checks.failed++; checks.details.push('screen_fail'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('screen_error'); }}
     
-    // Check 4: document properties
     try {{
       if (document.createElement && document.querySelector && document.title) {{
         checks.passed++; checks.details.push('document_ok');
       }} else {{ checks.failed++; checks.details.push('document_fail'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('document_error'); }}
     
-    // Check 5: window properties
     try {{
-      if (window.innerWidth > 0 && window.innerHeight > 0 && typeof window.location === 'object') {{
+      if (window.innerWidth > 0 && window.innerHeight > 0) {{
         checks.passed++; checks.details.push('window_dims_ok');
       }} else {{ checks.failed++; checks.details.push('window_dims_fail'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('window_error'); }}
     
-    // Check 6: plugins (real browsers have plugins)
     try {{
       const plugins = navigator.plugins;
       if (plugins && plugins.length > 0) {{
@@ -94,7 +140,6 @@ def render_js_verify_page(*, session_id: str, path: str) -> str:
       }} else {{ checks.failed++; checks.details.push('no_plugins'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('plugins_error'); }}
     
-    // Check 7: canvas fingerprint (basic test)
     try {{
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
@@ -105,76 +150,78 @@ def render_js_verify_page(*, session_id: str, path: str) -> str:
         checks.passed++; checks.details.push('canvas_ok');
       }} else {{ checks.failed++; checks.details.push('canvas_fail'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('canvas_error'); }}
-    
-    // Check 8: WebGL Hardware acceleration (catches headless servers using SwiftShader/llvmpipe)
+
+    // WebGL unmasked renderer
     try {{
-      const canvas = document.createElement('canvas');
-      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      const c = document.createElement('canvas');
+      const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
       if (gl) {{
-        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-        const vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
-        const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
-        
-        if (renderer) {{
-          const rL = renderer.toLowerCase();
-          if (rL.includes('swiftshader') || rL.includes('llvmpipe') || rL.includes('virtualbox')) {{
-            checks.failed++; checks.details.push('headless_software_renderer');
-          }} else {{
-            checks.passed++; checks.details.push('hardware_renderer_ok');
-          }}
-        }} else {{
-           checks.failed++; checks.details.push('no_webgl_renderer');
-        }}
-      }} else {{
-        checks.failed++; checks.details.push('no_webgl');
-      }}
+        const di = gl.getExtension('WEBGL_debug_renderer_info');
+        if (di) {{
+          const r = gl.getParameter(di.UNMASKED_RENDERER_WEBGL);
+          if (r) {{
+            const rL = r.toLowerCase();
+            if (rL.includes('swiftshader') || rL.includes('llvmpipe') || rL.includes('virtualbox')) {{
+              checks.failed++; checks.details.push('software_renderer:' + r.substring(0,40));
+            }} else {{
+              checks.passed++; checks.details.push('hardware_gpu:' + r.substring(0,40));
+            }}
+          }} else {{ checks.failed++; checks.details.push('no_renderer'); }}
+        }} else {{ checks.failed++; checks.details.push('no_webgl_debug'); }}
+      }} else {{ checks.failed++; checks.details.push('no_webgl'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('webgl_error'); }}
 
-    // Check 9: Advanced Automation Variables (Selenium/Puppeteer traces)
+    // Automation variable scan
     try {{
-      let hasBotVars = false;
-      for (let key in window) {{
-        if (typeof key === 'string' && (key.startsWith('cdc_') || key.startsWith('$cdc_') || key === '_phantom' || key === '__nightmare')) {{
-          hasBotVars = true; break;
+      let found = false;
+      const botKeys = ['cdc_','$cdc_','__webdriver','_phantom','__nightmare','__playwright','__selenium'];
+      for (const key of Object.getOwnPropertyNames(window)) {{
+        for (const bk of botKeys) {{
+          if (key.startsWith(bk) || key.includes(bk)) {{ found = true; break; }}
         }}
+        if (found) break;
       }}
-      if (hasBotVars || window.document.$cdc_asdjflasutopfhvcZLmcfl_ || window.document.__webdriver_evaluate || window.document.__selenium_evaluate) {{
-        checks.failed++; checks.details.push('automation_vars_present');
+      if (found) {{
+        checks.failed++; checks.details.push('automation_vars');
       }} else {{
         checks.passed++; checks.details.push('no_automation_vars');
       }}
-    }} catch(e) {{ checks.failed++; checks.details.push('automation_vars_error'); }}
-    
-    // Check 10: Headless specific Native Code evasion (detects stealth plugin overriding getters)
+    }} catch(e) {{ checks.failed++; checks.details.push('automation_check_error'); }}
+
+    // Stealth plugin proxy detection
     try {{
-      const navToStr = navigator.webdriver === undefined ? 'undefined' : 'defined';
-      let isProxied = false;
+      let proxied = false;
       try {{
-         const wdDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
-         if (wdDescriptor && wdDescriptor.get) {{
-             const str = Function.prototype.toString.call(wdDescriptor.get);
-             if (!str.includes('[native code]')) isProxied = true;
-         }}
+        const d = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+        if (d && d.get) {{
+          const s = Function.prototype.toString.call(d.get);
+          if (!s.includes('[native code]')) proxied = true;
+        }}
       }} catch(e) {{}}
-      
-      if (isProxied) {{
-         checks.failed++; checks.details.push('stealth_plugin_detected');
+      if (proxied) {{
+        checks.failed++; checks.details.push('stealth_proxy');
       }} else {{
-         checks.passed++; checks.details.push('no_stealth_plugin');
+        checks.passed++; checks.details.push('native_getters');
       }}
     }} catch(e) {{ checks.failed++; checks.details.push('stealth_check_error'); }}
-    
+
     return checks;
   }}
-  
-  // Submit verification
-  async function submitVerification(checks) {{
+
+  // Submit both PoW solution and env checks
+  async function submit(powResult, checks) {{
     try {{
       const res = await fetch('/bw/js-verify', {{
         method: 'POST',
         headers: {{ 'content-type': 'application/json' }},
         body: JSON.stringify({{
           session_id: SESSION_ID,
+          return_path: RETURN_PATH,
+          challenge_token: CHALLENGE_TOKEN,
+          challenge: CHALLENGE,
+          nonce: powResult.nonce,
+          hash: powResult.hash,
+          solve_ms: powResult.solveMs,
           checks: checks,
           timestamp: Date.now()
         }}),
@@ -188,13 +235,15 @@ def render_js_verify_page(*, session_id: str, path: str) -> str:
         subtitleEl.textContent = 'Redirecting to content...';
         statusEl.className = 'status ok';
         statusEl.textContent = 'Browser verification passed';
+        progressEl.textContent = '';
         setTimeout(() => location.replace(result.next_path || RETURN_PATH), 500);
       }} else {{
         titleEl.textContent = 'Verification Failed';
-        subtitleEl.textContent = 'Browser automation detected';
+        subtitleEl.textContent = 'Access denied';
         statusEl.className = 'status err';
-        statusEl.textContent = result.error || 'Redirecting to safe page...';
+        statusEl.textContent = result.error || 'Redirecting...';
         spinnerEl.style.display = 'none';
+        progressEl.textContent = '';
         if (result.next_path) {{
           setTimeout(() => location.replace(result.next_path), 1500);
         }}
@@ -205,12 +254,21 @@ def render_js_verify_page(*, session_id: str, path: str) -> str:
       statusEl.className = 'status err';
       statusEl.textContent = err.message;
       spinnerEl.style.display = 'none';
+      progressEl.textContent = '';
     }}
   }}
   
-  // Run checks and submit
-  const checks = await runChecks();
-  await submitVerification(checks);
+  // 1. Run environment checks
+  const checks = runChecks();
+  
+  // 2. Solve proof-of-work
+  subtitleEl.textContent = 'Solving challenge...';
+  const powResult = await solvePoW(CHALLENGE, DIFFICULTY);
+  progressEl.textContent = 'Solved in ' + powResult.solveMs + 'ms';
+  
+  // 3. Submit everything
+  subtitleEl.textContent = 'Submitting verification...';
+  await submit(powResult, checks);
 }})();
 </script>
 </body>

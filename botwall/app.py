@@ -580,9 +580,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=302
             )
         
-        # HUMAN → serve JS verification page (runs browser checks before issuing gate cookie)
+        # HUMAN → serve JS verification page with PoW challenge
         logger.warning(f"GATE_JS_VERIFY ip={client_ip} path={path}")
-        page = render_js_verify_page(session_id=session_id, path=path)
+        pow_challenge = issue_pow_challenge(
+            secret=cfg.secret_key,
+            session_id=session_id,
+            ip_hash=ip_hash,
+            difficulty=cfg.pow_default_difficulty,
+            ttl_seconds=120,
+        )
+        page = render_js_verify_page(
+            session_id=session_id,
+            path=path,
+            challenge=pow_challenge.challenge,
+            challenge_token=pow_challenge.challenge_token,
+            difficulty=pow_challenge.difficulty,
+        )
         response = HTMLResponse(page)
         response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True, samesite="lax", path="/")
         return response
@@ -590,10 +603,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/bw/js-verify")
     async def bw_js_verify(request: Request) -> JSONResponse:
         """
-        Verify client-side JS browser checks.
-        If checks pass → issue gate cookie and allow.
-        If checks fail → redirect to decoy.
+        Verify PoW solution + client-side JS browser checks.
+        Validates: signature, timing, one-time use, PoW hash, env signals.
+        If anything fails → redirect to decoy.
         """
+        import logging
+        logger = logging.getLogger("sinkhole.gate")
+
         body = await request.body()
         try:
             data = json.loads(body.decode("utf-8")) if body else {}
@@ -601,92 +617,116 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
         
         session_id = data.get("session_id")
-        checks = data.get("checks", {})
-        
         if not session_id:
             return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
         
         client_ip = _client_ip(request)
         ip_hash = hash_client_ip(client_ip, cfg.secret_key)
         session = store.store.load_session(session_id, ip_hash)
-        
-        passed = int(checks.get("passed", 0))
-        failed = int(checks.get("failed", 0))
-        details = checks.get("details", [])
-        
-        # Log the JS verification attempt
-        import logging
-        logger = logging.getLogger("sinkhole.gate")
-        logger.warning(f"JS_VERIFY ip={client_ip} sid={session_id[:8]} passed={passed} failed={failed} details={details}")
-        
-        # Check for bot indicators in JS results
-        is_bot = False
-        bot_reasons = []
-        
-        # Immediate failures for strong automation signals
-        strong_bot_signals = {
-            "webdriver_detected": "js:webdriver_detected",
-            "headless_software_renderer": "js:software_renderer_virtual_gpu",
-            "automation_vars_present": "js:selenium_puppeteer_vars",
-            "stealth_plugin_detected": "js:stealth_evasion_detected",
-        }
-        
-        for sig, reason in strong_bot_signals.items():
-            if sig in details:
-                is_bot = True
-                bot_reasons.append(reason)
-        
-        # If too many checks failed, likely a headless browser
-        if failed >= 4:
-            is_bot = True
-            bot_reasons.append(f"js:too_many_checks_failed:{failed}")
-        
-        # If no plugins and no canvas, likely automation
-        if "no_plugins" in details and "canvas_fail" in details:
-            is_bot = True
-            bot_reasons.append("js:missing_browser_features")
-        
-        # Must have passed at least 7 of the 10 checks to be considered human
-        if passed < 7:
-            is_bot = True
-            bot_reasons.append(f"js:insufficient_passed_checks:{passed}")
-        
-        if is_bot:
+
+        def _reject(reasons: list[str], error_msg: str = "Verification failed") -> JSONResponse:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
             session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
-            session.setdefault("reasons", []).extend(bot_reasons)
+            session.setdefault("reasons", []).extend(reasons)
             session["js_verification_failed"] = True
-            session["js_check_details"] = details
-            _record_decision(session, "decoy", bot_reasons)
+            _record_decision(session, "decoy", reasons)
             store.store.save_session(session)
-            
             node_id = hash(session_id) % cfg.decoy_max_nodes
-            logger.warning(f"JS_VERIFY_BLOCK ip={client_ip} reasons={bot_reasons}")
+            logger.warning(f"JS_VERIFY_BLOCK ip={client_ip} reasons={reasons}")
             return JSONResponse({
                 "ok": False,
                 "decision": "decoy",
-                "error": "Browser verification failed",
-                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type=bot&reason=js_verification_failed",
+                "error": error_msg,
+                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type=bot",
             }, status_code=403)
-        
-        # JS verification passed → issue gate cookie
+
+        # ── Step 1: Validate PoW solution ──────────────────────────────────
+        challenge_token = data.get("challenge_token", "")
+        challenge = data.get("challenge", "")
+        nonce = data.get("nonce", "")
+        submitted_hash = data.get("hash", "")
+        solve_ms = int(data.get("solve_ms", 0))
+
+        if not challenge_token or not challenge or not nonce or not submitted_hash:
+            return _reject(["pow:missing_fields"], "Missing proof-of-work data")
+
+        try:
+            pow_result = verify_pow_solution(
+                challenge_token=challenge_token,
+                secret=cfg.secret_key,
+                session_id=session_id,
+                ip_hash=ip_hash,
+                challenge=challenge,
+                nonce=nonce,
+                submitted_hash=submitted_hash,
+                solve_ms=solve_ms,
+                max_solve_seconds=cfg.pow_max_solve_seconds,
+            )
+        except TokenError as exc:
+            return _reject([f"pow:invalid:{exc}"], "Invalid proof-of-work")
+
+        # One-time use: prevent replay
+        if not store.store.mark_once("gate_pow_jti", pow_result.challenge_id, 300):
+            return _reject(["pow:replay_detected"], "Challenge already used")
+
+        # Server-side timing: must have taken at least 1 second
+        elapsed = pow_result.solved_at - pow_result.issued_at
+        if elapsed < 1:
+            return _reject([f"pow:too_fast:{elapsed}s"], "Solved too quickly")
+
+        logger.warning(f"JS_VERIFY_POW_OK ip={client_ip} sid={session_id[:8]} difficulty={pow_result.difficulty} solve_ms={solve_ms} elapsed={elapsed}s")
+
+        # ── Step 2: Validate environment checks ───────────────────────────
+        checks = data.get("checks", {})
+        passed = int(checks.get("passed", 0))
+        failed = int(checks.get("failed", 0))
+        details = checks.get("details", [])
+
+        logger.warning(f"JS_VERIFY ip={client_ip} passed={passed} failed={failed} details={details}")
+
+        is_bot = False
+        bot_reasons: list[str] = []
+
+        # Strong automation signals
+        for sig in details:
+            if sig in ("webdriver_detected", "automation_vars", "stealth_proxy"):
+                is_bot = True
+                bot_reasons.append(f"js:{sig}")
+            elif sig.startswith("software_renderer:"):
+                is_bot = True
+                bot_reasons.append(f"js:{sig}")
+
+        if failed >= 3:
+            is_bot = True
+            bot_reasons.append(f"js:checks_failed:{failed}")
+
+        if passed < 7:
+            is_bot = True
+            bot_reasons.append(f"js:insufficient_passed:{passed}")
+
+        if is_bot:
+            session["js_check_details"] = details
+            return _reject(bot_reasons, "Browser automation detected")
+
+        # ── Step 3: All checks passed → issue gate cookie ─────────────────
         gate_token = issue_gate_token(
             secret=cfg.secret_key,
             session_id=session_id,
             ip_hash=ip_hash,
-            solved_difficulty=1,
+            solved_difficulty=pow_result.difficulty,
             env_score=0,
             ttl_seconds=cfg.gate_ttl_seconds,
         )
-        
+
         session["gate_passed_at"] = now_ts()
         session["gate_env_score"] = 0
         session["gate_failures"] = 0
         session["js_verification_passed"] = True
         session["js_check_details"] = details
-        _record_decision(session, "allow", ["js_verification:passed"])
+        session["pow_solve_ms"] = solve_ms
+        _record_decision(session, "allow", ["js_verification:passed", f"pow:solved:d{pow_result.difficulty}"])
         store.store.save_session(session)
-        
+
         logger.warning(f"JS_VERIFY_ALLOW ip={client_ip}")
 
         response = JSONResponse({
