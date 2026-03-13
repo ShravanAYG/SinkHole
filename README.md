@@ -94,62 +94,53 @@ cd /home/bb/sinkhole
 
 - For push-to-deploy on AWS using GitHub Actions + SSH, see `CICD_AWS_SETUP.md`.
 
-## Standalone Reverse Proxy Container Deployment
+## Deployment: Protect Any Website (Docker)
 
-You can deploy Botwall as a generic Layer-7 Docker container to protect *any* website (acts like a self-hosted Cloudflare). The `Dockerfile.standalone` bundles both Nginx and Botwall.
+SinkHole is built to protect **any** website or application. It acts as a transparent reverse proxy: bots get poisoned content, humans pass through to your real app.
 
-### 1. Build the All-in-One Image
+### Mode 1: Protect an External Website
 
-```bash
-docker build -f Dockerfile.standalone -t botwall-proxy:latest .
-```
-
-### 2. Run the Container
-
-Protect any target website simply by changing the `UPSTREAM_URL` environment variable:
+If your website is already hosted somewhere else (e.g. `https://my-company.com`), use the standalone image:
 
 ```bash
+docker build -t sinkhole:latest .
+
 docker run -d \
-  --name botwall \
+  --name sinkhole \
   -p 80:80 \
-  -e UPSTREAM_URL="https://your-actual-website.com" \
-  -e BOTWALL_SECRET_KEY="your-secure-secret-key" \
-  botwall-proxy:latest
+  -e UPSTREAM_URL="https://my-company.com" \
+  -e BOTWALL_SECRET_KEY="change-me" \
+  sinkhole:latest
 ```
 
-## Testing on AWS EC2
+### Mode 2: Protect a Docker Container (Same Server)
 
-To quickly test this standalone setup on AWS:
+If you want to run your website and SinkHole on the same server, use Docker Compose. Your website is hidden from the internet, and SinkHole intercepts all traffic on port 80.
 
-1. Launch a new EC2 Instance (e.g., Ubuntu 24.04 LTS, t2.micro). Ensure **HTTP traffic (port 80)** is allowed in the Security Group.
-2. SSH into your instance and install Docker:
+1. Edit `docker-compose.production.yml` and replace the `origin` service with your website's image:
 
-   ```bash
-   sudo apt-get update
-   sudo apt-get install -y docker.io docker-compose
-   sudo systemctl start docker
-   sudo systemctl enable docker
-   sudo usermod -aG docker ubuntu
-   newgrp docker
-   ```
+```yaml
+services:
+  nginx:
+    ports: ["80:80"]    # Public internet hits SinkHole
+    # ...
+  botwall:
+    # ...
+  origin:
+    image: wordpress:latest   # ← YOUR APPLICATION HERE
+    expose: ["80"]            # ← YOUR APP'S PORT
+```
 
-3. Clone your repository (or transfer your files via `scp`):
+2. Update `deploy/nginx-production.conf` if your app uses a port other than 9000:
+```nginx
+set $origin_backend http://origin:80;  # ← MATCH YOUR PORT
+```
 
-   ```bash
-   git clone <your-repo-url> sinkhole
-   cd sinkhole
-   ```
+3. Start everything:
 
-4. Build and run the generic proxy (replace `httpbin.org` with your target):
+```bash
+export BOTWALL_SECRET_KEY=$(openssl rand -hex 32)
+docker compose -f docker-compose.production.yml up -d --build
+```
 
-   ```bash
-   docker build -f Dockerfile.standalone -t botwall-proxy:latest .
-   docker run -d \
-     --name botwall \
-     -p 80:80 \
-     -e UPSTREAM_URL="http://httpbin.org" \
-     -e BOTWALL_SECRET_KEY="super-secret-aws-key" \
-     botwall-proxy:latest
-   ```
-
-5. Navigate to your EC2 instance's **Public IP** in your browser. You will see traffic proxying to your target website, protected by Botwall.
+Traffic flow: `Internet :80 → Nginx → Botwall check → Your App (origin container)`
