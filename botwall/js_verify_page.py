@@ -106,6 +106,64 @@ def render_js_verify_page(*, session_id: str, path: str) -> str:
       }} else {{ checks.failed++; checks.details.push('canvas_fail'); }}
     }} catch(e) {{ checks.failed++; checks.details.push('canvas_error'); }}
     
+    // Check 8: WebGL Hardware acceleration (catches headless servers using SwiftShader/llvmpipe)
+    try {{
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      if (gl) {{
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        const vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
+        const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+        
+        if (renderer) {{
+          const rL = renderer.toLowerCase();
+          if (rL.includes('swiftshader') || rL.includes('llvmpipe') || rL.includes('virtualbox')) {{
+            checks.failed++; checks.details.push('headless_software_renderer');
+          }} else {{
+            checks.passed++; checks.details.push('hardware_renderer_ok');
+          }}
+        }} else {{
+           checks.failed++; checks.details.push('no_webgl_renderer');
+        }}
+      }} else {{
+        checks.failed++; checks.details.push('no_webgl');
+      }}
+    }} catch(e) {{ checks.failed++; checks.details.push('webgl_error'); }}
+
+    // Check 9: Advanced Automation Variables (Selenium/Puppeteer traces)
+    try {{
+      let hasBotVars = false;
+      for (let key in window) {{
+        if (typeof key === 'string' && (key.startsWith('cdc_') || key.startsWith('$cdc_') || key === '_phantom' || key === '__nightmare')) {{
+          hasBotVars = true; break;
+        }}
+      }}
+      if (hasBotVars || window.document.$cdc_asdjflasutopfhvcZLmcfl_ || window.document.__webdriver_evaluate || window.document.__selenium_evaluate) {{
+        checks.failed++; checks.details.push('automation_vars_present');
+      }} else {{
+        checks.passed++; checks.details.push('no_automation_vars');
+      }}
+    }} catch(e) {{ checks.failed++; checks.details.push('automation_vars_error'); }}
+    
+    // Check 10: Headless specific Native Code evasion (detects stealth plugin overriding getters)
+    try {{
+      const navToStr = navigator.webdriver === undefined ? 'undefined' : 'defined';
+      let isProxied = false;
+      try {{
+         const wdDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver');
+         if (wdDescriptor && wdDescriptor.get) {{
+             const str = Function.prototype.toString.call(wdDescriptor.get);
+             if (!str.includes('[native code]')) isProxied = true;
+         }}
+      }} catch(e) {{}}
+      
+      if (isProxied) {{
+         checks.failed++; checks.details.push('stealth_plugin_detected');
+      }} else {{
+         checks.passed++; checks.details.push('no_stealth_plugin');
+      }}
+    }} catch(e) {{ checks.failed++; checks.details.push('stealth_check_error'); }}
+    
     return checks;
   }}
   

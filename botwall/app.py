@@ -623,13 +623,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         is_bot = False
         bot_reasons = []
         
-        # If webdriver detected, it's a bot
-        if "webdriver_detected" in details:
-            is_bot = True
-            bot_reasons.append("js:webdriver_detected")
+        # Immediate failures for strong automation signals
+        strong_bot_signals = {
+            "webdriver_detected": "js:webdriver_detected",
+            "headless_software_renderer": "js:software_renderer_virtual_gpu",
+            "automation_vars_present": "js:selenium_puppeteer_vars",
+            "stealth_plugin_detected": "js:stealth_evasion_detected",
+        }
+        
+        for sig, reason in strong_bot_signals.items():
+            if sig in details:
+                is_bot = True
+                bot_reasons.append(reason)
         
         # If too many checks failed, likely a headless browser
-        if failed >= 3:
+        if failed >= 4:
             is_bot = True
             bot_reasons.append(f"js:too_many_checks_failed:{failed}")
         
@@ -638,8 +646,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             is_bot = True
             bot_reasons.append("js:missing_browser_features")
         
-        # Must have passed at least 5 checks to be considered human
-        if passed < 5:
+        # Must have passed at least 7 of the 10 checks to be considered human
+        if passed < 7:
             is_bot = True
             bot_reasons.append(f"js:insufficient_passed_checks:{passed}")
         

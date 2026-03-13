@@ -67,9 +67,13 @@ def _pass_gate(client: httpx.Client, return_to: str = "/") -> None:
         "session_id": sid,
         "return_path": return_to,
         "checks": {
-            "passed": 7,
+            "passed": 10,
             "failed": 0,
-            "details": ["window_ok", "navigator_ok", "no_webdriver", "screen_ok", "document_ok", "window_dims_ok", "plugins_ok:3", "canvas_ok"]
+            "details": [
+                "window_ok", "navigator_ok", "no_webdriver", "screen_ok", 
+                "document_ok", "window_dims_ok", "plugins_ok:3", "canvas_ok",
+                "hardware_renderer_ok", "no_automation_vars", "no_stealth_plugin"
+            ]
         },
         "timestamp": int(time.time() * 1000)
     }
@@ -224,9 +228,13 @@ def test_gate_verify_replay_and_tamper_rejected(live_base_url: str) -> None:
         "session_id": sid,
         "return_path": "/",
         "checks": {
-            "passed": 7,
+            "passed": 10,
             "failed": 0,
-            "details": ["window_ok", "navigator_ok", "no_webdriver", "screen_ok", "document_ok", "window_dims_ok", "plugins_ok:3", "canvas_ok"]
+            "details": [
+                "window_ok", "navigator_ok", "no_webdriver", "screen_ok", 
+                "document_ok", "window_dims_ok", "plugins_ok:3", "canvas_ok",
+                "hardware_renderer_ok", "no_automation_vars", "no_stealth_plugin"
+            ]
         },
         "timestamp": int(time.time() * 1000)
     }
