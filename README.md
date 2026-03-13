@@ -1,2 +1,2 @@
 # SinkHole
-AI bot helholl to prevent scraping
+AI bot hellhole to prevent scraping
