@@ -1,0 +1,45 @@
+server {
+    listen 80;
+    server_name _;  # Accept any domain name
+
+    location = /__bw_check {
+        internal;
+        proxy_pass ${BOTWALL_URL}/bw/check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header User-Agent $http_user_agent;
+        proxy_set_header Accept-Language $http_accept_language;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header X-JA3 $http_x_ja3;
+    }
+
+    location ~ ^/(bw/|api/v1/analytics-ping|cdn-ping/perf|event/flow) {
+        proxy_pass ${BOTWALL_URL};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    location / {
+        auth_request /__bw_check;
+        auth_request_set $bw_decision $upstream_http_x_botwall_decision;
+        
+        error_page 401 = @botwall_gate;
+        error_page 403 = @botwall_decoy;
+
+        # The target website to protect (e.g. https://my-actual-website.com)
+        # This will be substituted by Nginx's Docker entrypoint via env variable
+        proxy_pass ${UPSTREAM_URL};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    location @botwall_gate {
+        return 302 /bw/gate/challenge?path=$request_uri;
+    }
+
+    location @botwall_decoy {
+        return 302 /bw/decoy/0;
+    }
+}

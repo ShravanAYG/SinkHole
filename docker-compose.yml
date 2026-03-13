@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # The Bouncer: Intercepts all traffic before it hits your app
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"    # Expose the site on typical port 80
+    volumes:
+      # Use Nginx templates to inject environment variables
+      - ./deploy/docker-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    environment:
+      # Change this to whatever website you want to protect
+      - UPSTREAM_URL=http://origin_app:80
+      - BOTWALL_URL=http://botwall:4000
+    depends_on:
+      - botwall
+    restart: unless-stopped
+    networks:
+      - sinkhole_net
+
+  # The Brain: Our SinkHole advanced behavioral Engine
+  botwall:
+    build: .
+    environment:
+      # !! CHANGE THESE IN PRODUCTION !!
+      - BOTWALL_SECRET_KEY=change-me-to-a-strong-random-key
+      - BOTWALL_TELEMETRY_SECRET=change-me-key-for-cluster-sync
+      # Set to 1 and add BOTWALL_REDIS_URL='redis://redis:6379/0' when scaling
+      - BOTWALL_REDIS_ENABLED=0 
+    restart: unless-stopped
+    networks:
+      - sinkhole_net
+
+  # The Victim App: Any Web App (Node, PHP, standard website)
+  # For demo purposes, we will use httpbin as our dummy protected app
+  origin_app:
+    image: kennethreitz/httpbin
+    expose:
+      - "80"
+    networks:
+      - sinkhole_net
+
+networks:
+  sinkhole_net:
+    driver: bridge

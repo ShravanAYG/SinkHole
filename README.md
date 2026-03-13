@@ -93,3 +93,63 @@ cd /home/bb/sinkhole
 ## Deployment Automation
 
 - For push-to-deploy on AWS using GitHub Actions + SSH, see `CICD_AWS_SETUP.md`.
+
+## Standalone Reverse Proxy Container Deployment
+
+You can deploy Botwall as a generic Layer-7 Docker container to protect *any* website (acts like a self-hosted Cloudflare). The `Dockerfile.standalone` bundles both Nginx and Botwall.
+
+### 1. Build the All-in-One Image
+
+```bash
+docker build -f Dockerfile.standalone -t botwall-proxy:latest .
+```
+
+### 2. Run the Container
+
+Protect any target website simply by changing the `UPSTREAM_URL` environment variable:
+
+```bash
+docker run -d \
+  --name botwall \
+  -p 80:80 \
+  -e UPSTREAM_URL="https://your-actual-website.com" \
+  -e BOTWALL_SECRET_KEY="your-secure-secret-key" \
+  botwall-proxy:latest
+```
+
+## Testing on AWS EC2
+
+To quickly test this standalone setup on AWS:
+
+1. Launch a new EC2 Instance (e.g., Ubuntu 24.04 LTS, t2.micro). Ensure **HTTP traffic (port 80)** is allowed in the Security Group.
+2. SSH into your instance and install Docker:
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y docker.io docker-compose
+   sudo systemctl start docker
+   sudo systemctl enable docker
+   sudo usermod -aG docker ubuntu
+   newgrp docker
+   ```
+
+3. Clone your repository (or transfer your files via `scp`):
+
+   ```bash
+   git clone <your-repo-url> sinkhole
+   cd sinkhole
+   ```
+
+4. Build and run the generic proxy (replace `httpbin.org` with your target):
+
+   ```bash
+   docker build -f Dockerfile.standalone -t botwall-proxy:latest .
+   docker run -d \
+     --name botwall \
+     -p 80:80 \
+     -e UPSTREAM_URL="http://httpbin.org" \
+     -e BOTWALL_SECRET_KEY="super-secret-aws-key" \
+     botwall-proxy:latest
+   ```
+
+5. Navigate to your EC2 instance's **Public IP** in your browser. You will see traffic proxying to your target website, protected by Botwall.
