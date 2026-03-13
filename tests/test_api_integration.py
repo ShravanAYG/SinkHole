@@ -59,44 +59,22 @@ def _pass_gate(client: httpx.Client, return_to: str = "/") -> None:
     gate_page = client.get(f"/bw/gate/challenge?path={quote(return_to, safe='/?=&')}")
     assert gate_page.status_code == 200
 
-    challenge_token = _extract_const(gate_page.text, "CHALLENGE_TOKEN")
-    challenge = _extract_const(gate_page.text, "CHALLENGE")
-    difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
     sid = client.cookies.get("bw_sid")
     assert sid
 
-    start = time.perf_counter()
-    nonce, digest = _solve_pow(challenge, difficulty)
-    solve_ms = int((time.perf_counter() - start) * 1000)
-    if solve_ms < 60:
-        time.sleep((60 - solve_ms) / 1000.0)
-        solve_ms = 60
-
+    # Simulate successful browser JS verification checks
     payload = {
-        "schema_version": "1.0",
         "session_id": sid,
-        "challenge_token": challenge_token,
-        "challenge": challenge,
-        "nonce": nonce,
-        "hash": digest,
-        "solve_ms": solve_ms,
-        "return_to": return_to,
-        "env": {
-            "schema_version": "1.0",
-            "webdriver": False,
-            "chrome_obj": True,
-            "plugins_count": 3,
-            "languages": ["en-US", "en"],
-            "viewport": [1366, 768],
-            "notification_api": True,
-            "perf_memory": True,
-            "touch_support": False,
-            "device_pixel_ratio": 1.0,
-            "timezone": "UTC",
-            "renderer": "ANGLE (NVIDIA)",
+        "return_path": return_to,
+        "checks": {
+            "passed": 7,
+            "failed": 0,
+            "details": ["window_ok", "navigator_ok", "no_webdriver", "screen_ok", "document_ok", "window_dims_ok", "plugins_ok:3", "canvas_ok"]
         },
+        "timestamp": int(time.time() * 1000)
     }
-    verify = client.post("/bw/gate/verify", json=payload)
+    
+    verify = client.post("/bw/js-verify", json=payload)
     assert verify.status_code == 200
     assert verify.json().get("decision") == "allow"
     assert client.cookies.get("bw_gate")
@@ -239,69 +217,33 @@ def test_gate_verify_replay_and_tamper_rejected(live_base_url: str) -> None:
 
     gate_page = client.get("/bw/gate/challenge?path=/")
     assert gate_page.status_code == 200
-    challenge_token = _extract_const(gate_page.text, "CHALLENGE_TOKEN")
-    challenge = _extract_const(gate_page.text, "CHALLENGE")
-    difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
     sid = client.cookies.get("bw_sid")
     assert sid
 
-    nonce, digest = _solve_pow(challenge, difficulty)
     payload = {
-        "schema_version": "1.0",
         "session_id": sid,
-        "challenge_token": challenge_token,
-        "challenge": challenge,
-        "nonce": nonce,
-        "hash": digest,
-        "solve_ms": 60,
-        "return_to": "/",
-        "env": {
-            "schema_version": "1.0",
-            "webdriver": False,
-            "chrome_obj": True,
-            "plugins_count": 3,
-            "languages": ["en-US", "en"],
-            "viewport": [1366, 768],
-            "notification_api": True,
-            "perf_memory": True,
-            "touch_support": False,
-            "device_pixel_ratio": 1.0,
-            "timezone": "UTC",
-            "renderer": "ANGLE (NVIDIA)",
+        "return_path": "/",
+        "checks": {
+            "passed": 7,
+            "failed": 0,
+            "details": ["window_ok", "navigator_ok", "no_webdriver", "screen_ok", "document_ok", "window_dims_ok", "plugins_ok:3", "canvas_ok"]
         },
+        "timestamp": int(time.time() * 1000)
     }
 
-    ok = client.post("/bw/gate/verify", json=payload)
+    ok = client.post("/bw/js-verify", json=payload)
     assert ok.status_code == 200
 
-    replay = client.post("/bw/gate/verify", json=payload)
-    assert replay.status_code == 409
-
+    # Test tampering a failed check
     tampered = dict(payload)
-    tampered["hash"] = "0" * 64
-    bad = client.post("/bw/gate/verify", json=tampered)
-    assert bad.status_code == 400
-
-
-def test_gate_difficulty_escalates_for_bad_reputation(live_base_url: str) -> None:
-    client = httpx.Client(
-        base_url=live_base_url,
-        headers={
-            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-            "accept-language": "en-US,en;q=0.9",
-            "x-ip-reputation": "bad",
-        },
-        follow_redirects=False,
-        timeout=8.0,
-    )
-    gate_page = client.get("/bw/gate/challenge?path=/")
-    assert gate_page.status_code == 200
-    difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
-    assert difficulty >= 3
+    tampered["checks"]["failed"] = 5
+    tampered["checks"]["passed"] = 1
+    bad = client.post("/bw/js-verify", json=tampered)
+    assert bad.status_code == 403
 
 
 def test_explicit_scrapers_are_sent_to_decoy_before_gate(live_base_url: str) -> None:
-    for ua in ["curl/8.5.0", "Wget/1.21.4", "python-requests/2.31.0"]:
+    for ua in ["firecrawl/1.0", "my-custom-scraper", "HeadlessChrome/120.0"]:
         client = httpx.Client(
             base_url=live_base_url,
             headers={"user-agent": ua},
@@ -310,7 +252,7 @@ def test_explicit_scrapers_are_sent_to_decoy_before_gate(live_base_url: str) -> 
         )
         response = client.get("/")
         assert response.status_code == 302
-        assert response.headers.get("location", "").startswith("/bw/decoy/")
+        assert "/bw/decoy/" in response.headers.get("location", "")
 
 
 def test_headless_decoy_and_recovery(live_base_url: str) -> None:

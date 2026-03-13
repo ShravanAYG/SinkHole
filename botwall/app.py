@@ -680,12 +680,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store.store.save_session(session)
         
         logger.warning(f"JS_VERIFY_ALLOW ip={client_ip}")
-        
-        return JSONResponse({
+
+        response = JSONResponse({
             "ok": True,
             "decision": "allow",
             "next_path": data.get("return_path", "/"),
         })
+        response.set_cookie(
+            key=cfg.gate_cookie,
+            value=gate_token,
+            httponly=True,
+            samesite="lax",
+            max_age=cfg.gate_ttl_seconds,
+            path="/",
+        )
+        return response
 
     @app.post("/bw/gate/verify")
     async def bw_gate_verify(request: Request) -> Response:
