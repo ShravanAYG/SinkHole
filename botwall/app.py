@@ -12,19 +12,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
-from .html import (
-    render_challenge_page,
-    render_dashboard,
-    render_decoy_page,
-    render_origin_page,
-    render_recovery_page,
-    sdk_script,
-    render_gate_challenge_page,
-)
+from .html import render_challenge_page, render_dashboard, render_decoy_page, render_gate_blocked_page, render_gate_challenge_page, render_origin_page, render_recovery_page, render_telemetry_page, sdk_script
 from .models import (
     BeaconEvent,
     CheckResponse,
     DecisionState,
+    GateVerifyRequest,
+    GateVerifyResponse,
     ProofSubmission,
     RecoveryCompleteRequest,
     RecoveryCompleteResponse,
@@ -33,10 +27,16 @@ from .models import (
     TelemetryExport,
     TelemetryFingerprint,
     TelemetryImport,
-    GateVerifyRequest,
-    GateVerifyResponse,
 )
-from .proof import issue_proof_token, verify_proof_token, issue_gate_token
+from .proof import (
+    issue_gate_token,
+    issue_pow_challenge,
+    issue_proof_token,
+    score_gate_environment,
+    verify_gate_token,
+    verify_pow_solution,
+    verify_proof_token,
+)
 from .scoring import apply_score, decide, score_beacon, score_request, score_telemetry_match, score_traversal
 from .telemetry import export_feed, fingerprint_from_beacon, parse_peer_secrets, verify_import
 from .state import StoreManager, init_store
@@ -118,6 +118,48 @@ def _match_telemetry_fingerprint(store: StoreManager, fingerprint: str) -> float
     return 0.0
 
 
+def _build_operator_telemetry_snapshot(store: StoreManager) -> dict[str, Any]:
+    sessions = store.store.list_sessions(limit=200)
+    telemetry = store.store.list_telemetry(limit=240)
+
+    gate_passed = 0
+    proof_sessions = 0
+    decoy_sessions = 0
+    allow_sessions = 0
+    total_score = 0.0
+
+    for s in sessions:
+        total_score += float(s.get("score", 0.0))
+        if s.get("gate_passed_at"):
+            gate_passed += 1
+        if int(s.get("proof_valid", 0)) > 0:
+            proof_sessions += 1
+
+        history = s.get("decision_history", [])
+        if history:
+            latest = str(history[-1].get("decision", ""))
+            if latest == "decoy":
+                decoy_sessions += 1
+            if latest == "allow":
+                allow_sessions += 1
+
+    metrics = {
+        "sessions_total": len(sessions),
+        "gate_passed": gate_passed,
+        "proof_sessions": proof_sessions,
+        "decoy_sessions": decoy_sessions,
+        "allow_sessions": allow_sessions,
+        "avg_score": (total_score / len(sessions)) if sessions else 0.0,
+    }
+
+    return {
+        "store_backend": store.backend,
+        "metrics": metrics,
+        "sessions": sessions,
+        "telemetry": telemetry,
+    }
+
+
 def _evaluate_request(
     *,
     request: Request,
@@ -179,6 +221,33 @@ def _evaluate_request(
     return session, session_id, reasons + req_outcome.reasons, decision, ip_hash
 
 
+def _check_gate_cookie(
+    request: Request,
+    cfg: Settings,
+    ip_hash: str,
+) -> tuple[bool, dict | None]:
+    """
+    Verify the Stage 1 gate cookie.
+    Returns (valid: bool, payload: dict | None).
+    If valid=False, the caller must redirect to /bw/gate/challenge.
+    """
+    if not cfg.gate_cookie:
+        return True, None  # gate disabled in config
+    raw_token = request.cookies.get(cfg.gate_cookie)
+    if not raw_token:
+        return False, None
+    try:
+        payload = verify_gate_token(
+            token=raw_token,
+            secret=cfg.secret_key,
+            current_ip_hash=ip_hash,
+        )
+        return True, payload
+    except (TokenError, Exception):
+        return False, None
+
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Botwall API", version="0.1.0")
     cfg = settings or load_settings()
@@ -188,6 +257,158 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok", "store": store.backend}
+
+    # ── Stage 1: Entry Gate ────────────────────────────────────────────────────
+
+    @app.get("/bw/gate/challenge")
+    async def bw_gate_challenge(request: Request, path: str = "/") -> HTMLResponse:
+        """
+        Serve the PoW challenge page.
+        The page JS auto-starts solving; no user click needed.
+        Submit solution to /bw/gate/verify → gate cookie is set → redirect to `path`.
+        """
+        session_id = _get_session_id(request, cfg)
+        client_ip  = _client_ip(request)
+        ip_hash    = hash_client_ip(client_ip, cfg.secret_key)
+        ip_rep     = request.headers.get("x-ip-reputation", "unknown")
+        session    = store.store.load_session(session_id, ip_hash)
+        failures   = int(session.get("gate_failures", 0))
+        difficulty = (
+            cfg.pow_elevated_difficulty
+            if ip_rep == "bad" or failures >= 2
+            else cfg.pow_default_difficulty
+        )
+        pow_challenge = issue_pow_challenge(
+            secret=cfg.secret_key,
+            session_id=session_id,
+            ip_hash=ip_hash,
+            difficulty=difficulty,
+            ttl_seconds=cfg.pow_max_solve_seconds + 5,
+        )
+        page = render_gate_challenge_page(
+            session_id=session_id,
+            challenge_token=pow_challenge.challenge_token,
+            challenge=pow_challenge.challenge,
+            difficulty=difficulty,
+            return_to=path,
+        )
+        response = HTMLResponse(page)
+        response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True, samesite="lax", path="/")
+        return response
+
+    @app.post("/bw/gate/verify", response_model=GateVerifyResponse)
+    async def bw_gate_verify(payload: GateVerifyRequest, request: Request) -> Response:
+        """
+        Validate PoW solution and browser env report.
+        Success → issues bw_gate cookie, returns {next_path} JSON for JS redirect.
+        Hard-fail (webdriver detected) → 403 HTML with elevated re-challenge.
+        """
+        client_ip  = _client_ip(request)
+        ip_hash    = hash_client_ip(client_ip, cfg.secret_key)
+        now        = now_ts()
+        session_id = payload.session_id
+        session    = store.store.load_session(session_id, ip_hash)
+
+        # 1. PoW verification
+        try:
+            pow_result = verify_pow_solution(
+                challenge_token=payload.challenge_token,
+                secret=cfg.secret_key,
+                session_id=session_id,
+                ip_hash=ip_hash,
+                challenge=payload.challenge,
+                nonce=payload.nonce,
+                submitted_hash=payload.hash,
+                solve_ms=int(payload.solve_ms),
+                max_solve_seconds=cfg.pow_max_solve_seconds,
+            )
+        except TokenError as exc:
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            store.store.save_session(session)
+            raise HTTPException(status_code=400, detail=f"PoW failed: {exc}") from exc
+
+        # Anti-replay: one gate token per challenge
+        if not store.store.mark_once("gate_jti", pow_result.challenge_id, cfg.gate_ttl_seconds):
+            raise HTTPException(status_code=409, detail="challenge replay detected")
+
+        # 2. Environment scoring
+        env_dict = payload.env.model_dump()
+        ua = request.headers.get("user-agent", "")
+        env_score, env_reasons, hard_fail = score_gate_environment(env_dict, request_user_agent=ua)
+
+        # 3. Hard fail: issue elevated challenge page as 403 HTML
+        if hard_fail:
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            store.store.save_session(session)
+            elevated = issue_pow_challenge(
+                secret=cfg.secret_key,
+                session_id=session_id,
+                ip_hash=ip_hash,
+                difficulty=cfg.pow_elevated_difficulty,
+                ttl_seconds=cfg.pow_max_solve_seconds + 5,
+            )
+            blocked_page = render_gate_blocked_page(
+                session_id=session_id,
+                challenge_token=elevated.challenge_token,
+                challenge=elevated.challenge,
+                difficulty=cfg.pow_elevated_difficulty,
+                return_to=payload.return_to,
+                reasons=env_reasons,
+            )
+            return HTMLResponse(content=blocked_page, status_code=403)
+
+        # 4. Issue gate token
+        gate_token = issue_gate_token(
+            secret=cfg.secret_key,
+            session_id=session_id,
+            ip_hash=ip_hash,
+            solved_difficulty=pow_result.difficulty,
+            env_score=env_score,
+            ttl_seconds=cfg.gate_ttl_seconds,
+        )
+        session["gate_passed_at"]  = now
+        session["gate_env_score"]  = env_score
+        session["gate_difficulty"] = pow_result.difficulty
+        session["gate_failures"]   = 0
+        store.store.save_session(session)
+
+        resp_data = GateVerifyResponse(
+            session_id=session_id,
+            decision="allow",
+            env_score=env_score,
+            next_path=payload.return_to or "/",
+            gate_expires_at=now + cfg.gate_ttl_seconds,
+            reasons=env_reasons,
+        )
+        response = JSONResponse(resp_data.model_dump(mode="json"))
+        response.set_cookie(key=cfg.gate_cookie, value=gate_token, httponly=True,
+                            samesite="lax", max_age=cfg.gate_ttl_seconds, path="/")
+        response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True,
+                            samesite="lax", path="/")
+        return response
+
+    @app.get("/bw/gate/check")
+    async def bw_gate_check(request: Request) -> JSONResponse:
+        """
+        Integration helper for reverse-proxies:
+        validates the current gate cookie against client IP binding.
+        """
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        ok, payload = _check_gate_cookie(request, cfg, ip_hash)
+        if not ok:
+            return JSONResponse({"ok": False, "reason": "missing_or_invalid_gate"}, status_code=401)
+        return JSONResponse(
+            {
+                "ok": True,
+                "session_id": payload.get("sid") if payload else None,
+                "expires_at": payload.get("exp") if payload else None,
+                "difficulty": payload.get("diff") if payload else None,
+                "env_score": payload.get("env") if payload else None,
+            }
+        )
+
+    # ── Stage 2: check + scoring routes ───────────────────────────────────────
 
     @app.get("/bw/sdk.js")
     def bw_sdk_js() -> Response:
@@ -239,117 +460,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store.store.save_session(session)
 
         page = render_challenge_page(session_id=session_id, token=token, nonce=nonce, target_path=target_path)
-        return HTMLResponse(page)
-
-    @app.get("/bw/gate/challenge")
-    async def bw_gate_challenge(request: Request) -> HTMLResponse:
-        session_id = _get_session_id(request, cfg)
-        target_path = request.query_params.get("path", "/")
-        
-        import secrets
-        challenge = secrets.token_hex(16)
-        
-        client_ip = _client_ip(request)
-        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
-        session = store.store.load_session(session_id, ip_hash)
-        
-        diff = cfg.pow_default_difficulty
-        if request.headers.get("x-ip-reputation") == "bad" or session.get("gate_failures", 0) >= 2:
-            diff = cfg.pow_elevated_difficulty
-            
-        store.store.mark_once(f"pow:{challenge}", str(diff), cfg.pow_max_solve_seconds)
-        
-        page = render_gate_challenge_page(
-            session_id=session_id, 
-            challenge=challenge, 
-            difficulty=diff, 
-            target_path=target_path
-        )
-        return HTMLResponse(page)
-
-    @app.post("/bw/gate/verify", response_model=GateVerifyResponse)
-    async def bw_gate_verify(request: Request, payload: GateVerifyRequest) -> GateVerifyResponse | JSONResponse:
-        import hashlib
-        
-        challenge = payload.challenge
-        submitted_nonce = payload.nonce
-        
-        # Verify the challenge exists and is not expired (using mark_once as basic exist check, though it marks it)
-        # Note: mark_once returns True if it sets it (meaning it didn't exist). 
-        # Wait, actually we can just store the challenge in session or mark_once earlier? 
-        # If we didn't use redis properly to fetch difficulty, we can re-derive it
-        client_ip = _client_ip(request)
-        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
-        
-        session_id = _get_session_id(request, cfg)
-        session = store.store.load_session(session_id, ip_hash)
-        
-        diff = cfg.pow_default_difficulty
-        if request.headers.get("x-ip-reputation") == "bad" or session.get("gate_failures", 0) >= 2:
-            diff = cfg.pow_elevated_difficulty
-            
-        target = "0" * diff
-        input_bytes = (challenge + submitted_nonce).encode("utf-8")
-        computed_hash = hashlib.sha256(input_bytes).hexdigest()
-        
-        if not computed_hash.startswith(target):
-            session["gate_failures"] = session.get("gate_failures", 0) + 1
-            store.store.save_session(session)
-            return JSONResponse(status_code=400, content={"ok": False, "reason": "invalid_pow"})
-            
-        # Optional: anti-replay check
-        if not store.store.mark_once("pow_solved", challenge, cfg.pow_max_solve_seconds):
-            return JSONResponse(status_code=400, content={"ok": False, "reason": "replayed_pow"})
-
-        # Score environment
-        env_score = 0.0
-        env = payload.env_report
-        ua = request.headers.get("user-agent", "")
-        
-        if env.webdriver:
-            session["gate_failures"] = session.get("gate_failures", 0) + 2
-            store.store.save_session(session)
-            return JSONResponse(status_code=400, content={"ok": False, "reason": "webdriver_detected"})
-            
-        if "Chrome" in ua and not env.chrome_obj:
-            env_score -= 30
-        if env.plugins_count < 1:
-            env_score -= 15
-        if len(env.languages) < 2:
-            env_score -= 10
-        if not env.notification_api:
-            env_score -= 10
-        if "Chrome" in ua and not env.perf_memory:
-            env_score -= 10
-        if tuple(env.viewport) == (0, 0) or tuple(env.viewport) == (800, 600):
-            env_score -= 15
-        if env.renderer in ["none", "SwiftShader", "llvmpipe"]:
-            env_score -= 20
-            
-        token, _ = issue_gate_token(
-            secret=cfg.secret_key,
-            session_id=session_id,
-            ip_hash=ip_hash,
-            difficulty=diff,
-            env_score=env_score,
-            ttl_seconds=cfg.gate_ttl_seconds
-        )
-        
-        response = GateVerifyResponse(ok=True)
-        resp_obj = JSONResponse(content=response.model_dump())
-        resp_obj.set_cookie(
-            key=cfg.gate_cookie,
-            value=token,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            max_age=cfg.gate_ttl_seconds,
-            path="/"
-        )
-        
-        session["gate_failures"] = 0
-        store.store.save_session(session)
-        return resp_obj
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = "challenge"
+        _attach_cookie(response, cfg, session_id)
+        return response
 
     @app.post("/bw/proof", response_model=DecisionState)
     async def bw_proof(request: Request, payload: ProofSubmission) -> JSONResponse:
@@ -452,7 +566,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/bw/decoy/{node_id}")
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
-        node = build_node(session_id, node_id % cfg.decoy_max_nodes)
+        node = build_node(
+            session_id,
+            node_id % cfg.decoy_max_nodes,
+            max_nodes=cfg.decoy_max_nodes,
+            min_links=cfg.decoy_min_links,
+            max_links=cfg.decoy_max_links,
+        )
         response = HTMLResponse(render_decoy_page(node=node, session_id=session_id))
         response.headers["x-botwall-decision"] = "decoy"
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
@@ -564,22 +684,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/bw/dashboard")
     async def bw_dashboard() -> HTMLResponse:
-        body = {
-            "store_backend": store.backend,
-            "sessions": store.store.list_sessions(limit=100),
-            "telemetry": store.store.list_telemetry(limit=120),
-        }
+        body = _build_operator_telemetry_snapshot(store)
         return HTMLResponse(render_dashboard(body))
+
+    @app.get("/bw/telemetry")
+    async def bw_telemetry_console() -> HTMLResponse:
+        body = _build_operator_telemetry_snapshot(store)
+        return HTMLResponse(render_telemetry_page(body))
+
+    @app.get("/bw/telemetry.json")
+    async def bw_telemetry_json() -> JSONResponse:
+        return JSONResponse(_build_operator_telemetry_snapshot(store))
 
     @app.get("/__dashboard")
     async def bw_dashboard_json() -> JSONResponse:
-        return JSONResponse(
-            {
-                "store_backend": store.backend,
-                "sessions": store.store.list_sessions(limit=100),
-                "telemetry": store.store.list_telemetry(limit=120),
-            }
-        )
+        return JSONResponse(_build_operator_telemetry_snapshot(store))
 
     @app.get("/bw/config")
     async def bw_config_dump() -> JSONResponse:
@@ -614,6 +733,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/")
     async def home(request: Request) -> Response:
+        client_ip = _client_ip(request)
+        ip_hash   = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/", status_code=302)
+
         session, session_id, reasons, decision, ip_hash = _evaluate_request(
             request=request,
             settings=cfg,
@@ -641,6 +766,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/content/{page_id}")
     async def content_page(page_id: int, request: Request) -> Response:
         target_path = f"/content/{page_id}"
+        client_ip   = _client_ip(request)
+        ip_hash_pre = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _  = _check_gate_cookie(request, cfg, ip_hash_pre)
+        if not gate_ok:
+            encoded = urllib.parse.quote(target_path, safe="/")
+            return RedirectResponse(url=f"/bw/gate/challenge?path={encoded}", status_code=302)
+
         session, session_id, reasons, decision, ip_hash = _evaluate_request(
             request=request,
             settings=cfg,

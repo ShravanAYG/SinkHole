@@ -34,6 +34,43 @@ class BeaconEvent(BaseModel):
     ua_data: dict[str, Any] = Field(default_factory=dict)
 
 
+class GateEnvReport(BaseModel):
+    schema_version: str = Field(default=SCHEMA_VERSION)
+    webdriver: bool = False
+    chrome_obj: bool = True
+    plugins_count: int = 0
+    languages: list[str] = Field(default_factory=list)
+    viewport: list[int] = Field(default_factory=lambda: [0, 0])
+    notification_api: bool = True
+    perf_memory: bool = True
+    touch_support: bool = False
+    device_pixel_ratio: float = 1.0
+    timezone: str = ""
+    renderer: str = "unknown"
+
+
+class GateVerifyRequest(BaseModel):
+    schema_version: str = Field(default=SCHEMA_VERSION)
+    session_id: str
+    challenge_token: str
+    challenge: str
+    nonce: str
+    hash: str
+    solve_ms: int
+    return_to: str = "/"
+    env: GateEnvReport
+
+
+class GateVerifyResponse(BaseModel):
+    schema_version: str = Field(default=SCHEMA_VERSION)
+    session_id: str
+    decision: Literal["allow", "challenge"]
+    env_score: int
+    next_path: str
+    gate_expires_at: int | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
 class ProofSubmission(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
     session_id: str
@@ -111,32 +148,6 @@ class RecoveryCompleteResponse(BaseModel):
 class CheckResponse(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
     session_id: str
-    decision: Literal["allow", "observe", "challenge", "decoy"]
+    decision: Literal["gate", "allow", "observe", "challenge", "decoy"]
     score: float
     reasons: list[str]
-
-
-class EnvReport(BaseModel):
-    webdriver: bool
-    chrome_obj: bool
-    plugins_count: int
-    languages: list[str]
-    viewport: list[int]
-    notification_api: bool
-    perf_memory: bool
-    touch_support: bool
-    device_pixel_ratio: float
-    timezone: str
-    renderer: str
-
-
-class GateVerifyRequest(BaseModel):
-    challenge: str
-    nonce: str
-    env_report: EnvReport
-
-
-class GateVerifyResponse(BaseModel):
-    ok: bool
-    reason: str | None = None
-

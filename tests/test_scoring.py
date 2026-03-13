@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from botwall.models import BeaconEvent
-from botwall.scoring import apply_score, decide, score_beacon, score_request
+from botwall.scoring import apply_score, decide, score_beacon, score_request, score_traversal, sequence_quality
 
 
 def _session() -> dict:
@@ -95,3 +95,43 @@ def test_sequence_requires_proof_then_allow() -> None:
 
     decision, _ = decide(s, sequence_window=16, now=102)
     assert decision == "allow"
+
+
+def test_traversal_penalty_and_bonus_are_applied() -> None:
+    s = _session()
+    bad = score_traversal(s, valid=False)
+    good = score_traversal(s, valid=True)
+    assert bad.delta < 0
+    assert good.delta > 0
+
+
+def test_sequence_quality_penalizes_uniform_dwell_pattern() -> None:
+    s = _session()
+    s["events"] = [
+        {
+            "dwell_ms": 1000,
+            "max_scroll_depth": 50,
+            "trap_hits": 0,
+            "pointer_moves": 10,
+            "pointer_entropy": 1.0,
+            "page_history": ["/", "/a"],
+        },
+        {
+            "dwell_ms": 1002,
+            "max_scroll_depth": 60,
+            "trap_hits": 0,
+            "pointer_moves": 11,
+            "pointer_entropy": 1.1,
+            "page_history": ["/a", "/b"],
+        },
+        {
+            "dwell_ms": 998,
+            "max_scroll_depth": 65,
+            "trap_hits": 0,
+            "pointer_moves": 9,
+            "pointer_entropy": 1.2,
+            "page_history": ["/b", "/c"],
+        },
+    ]
+    q = sequence_quality(s, window=16)
+    assert q < 8

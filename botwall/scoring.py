@@ -90,6 +90,21 @@ def _variance(values: list[float]) -> float:
     return statistics.pvariance(values)
 
 
+def _platform_family(value: str) -> str:
+    v = value.lower()
+    if "windows" in v or "win" in v:
+        return "windows"
+    if "mac" in v or "darwin" in v:
+        return "mac"
+    if "linux" in v or "x11" in v:
+        return "linux"
+    if "android" in v:
+        return "android"
+    if "iphone" in v or "ipad" in v or "ios" in v:
+        return "ios"
+    return "unknown"
+
+
 def score_beacon(
     beacon: BeaconEvent,
     request_ua: str | None = None,
@@ -99,7 +114,8 @@ def score_beacon(
     delta = 0.0
 
     if beacon.trap_hits > 0:
-        penalty = max(weights.ua_bot_marker, beacon.trap_hits * weights.trap_hit_per_event)
+        # Cap trap penalty at -50 by default to avoid unbounded single-signal dominance.
+        penalty = max(-50.0, beacon.trap_hits * weights.trap_hit_per_event)
         delta += penalty
         reasons.append("beacon:trap_hit")
 
@@ -141,6 +157,13 @@ def score_beacon(
         if ("chrome" in req and "chrome" not in b_ua) or ("safari" in req and "safari" not in b_ua):
             delta += weights.ua_mismatch_tls_js
             reasons.append("beacon:ua_mismatch")
+
+    if request_ua and beacon.platform:
+        req_family = _platform_family(request_ua)
+        platform_family = _platform_family(beacon.platform)
+        if req_family != "unknown" and platform_family != "unknown" and req_family != platform_family:
+            delta += weights.platform_mismatch
+            reasons.append("beacon:platform_mismatch")
 
     # ua_data empty in a Chrome request → headless signal
     if beacon.ua_data == {} and request_ua and "chrome" in (request_ua or "").lower():

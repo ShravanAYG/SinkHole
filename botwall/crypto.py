@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -33,8 +34,11 @@ def verify_json(token: str, secret: str) -> dict[str, Any]:
     except ValueError as exc:
         raise TokenError("malformed token") from exc
 
-    body = _b64decode(body_b64)
-    received_mac = _b64decode(mac_b64)
+    try:
+        body = _b64decode(body_b64)
+        received_mac = _b64decode(mac_b64)
+    except (binascii.Error, ValueError) as exc:
+        raise TokenError("malformed token") from exc
     expected_mac = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
     if not hmac.compare_digest(received_mac, expected_mac):
         raise TokenError("invalid signature")
