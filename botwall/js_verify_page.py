@@ -1,3 +1,6 @@
+import json
+
+
 def render_js_verify_page(*, session_id: str, path: str) -> str:
     """Lightweight JS verification - runs browser env checks."""
     sid_js = json.dumps(session_id)
