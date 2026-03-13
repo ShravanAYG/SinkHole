@@ -2828,6 +2828,949 @@ def render_behavioral_challenge_page(*, session_id: str, challenge_token: str, r
 </html>"""
 
 
+def render_wizard_page(*, session_id: str) -> str:
+    """Multi-step form wizard for behavioral pattern testing."""
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Form Wizard - Behavioral Testing</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; --accent-2: #1aa179; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; font-size: 0.9rem; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 800px; margin: 0 auto; padding: 2rem 1rem; }}
+    h1 {{ font-size: 1.75rem; margin-bottom: 0.5rem; }}
+    .subtitle {{ color: var(--muted); margin-bottom: 2rem; }}
+    
+    /* Wizard Steps */
+    .wizard-steps {{ display: flex; gap: 0.5rem; margin-bottom: 2rem; }}
+    .step {{ flex: 1; text-align: center; padding: 1rem; background: var(--surface); border: 2px solid var(--border); border-radius: 8px; font-weight: 500; color: var(--muted); }}
+    .step.active {{ border-color: var(--accent); color: var(--accent); background: #e7f3ff; }}
+    .step.completed {{ border-color: var(--accent-2); color: var(--accent-2); }}
+    .step-number {{ display: inline-block; width: 24px; height: 24px; border-radius: 50%; background: var(--border); color: white; font-size: 0.75rem; line-height: 24px; margin-right: 0.5rem; }}
+    .step.active .step-number {{ background: var(--accent); }}
+    .step.completed .step-number {{ background: var(--accent-2); }}
+    
+    /* Form Card */
+    .form-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; }}
+    .form-card h2 {{ margin: 0 0 1.5rem; font-size: 1.25rem; }}
+    .form-group {{ margin-bottom: 1.25rem; }}
+    .form-group label {{ display: block; margin-bottom: 0.5rem; font-weight: 500; }}
+    .form-group input, .form-group select, .form-group textarea {{ width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; font-size: 1rem; font-family: inherit; }}
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus {{ outline: none; border-color: var(--accent); }}
+    .form-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }}
+    .form-row.three {{ grid-template-columns: 1fr 1fr 1fr; }}
+    
+    /* Buttons */
+    .btn {{ padding: 0.75rem 1.5rem; border: none; border-radius: 6px; font-size: 1rem; font-weight: 500; cursor: pointer; transition: all 0.2s; }}
+    .btn-primary {{ background: var(--accent); color: white; }}
+    .btn-primary:hover {{ background: #0952a8; }}
+    .btn-secondary {{ background: var(--border); color: var(--text); }}
+    .btn-secondary:hover {{ background: #c1c9d0; }}
+    .btn-group {{ display: flex; justify-content: space-between; margin-top: 2rem; }}
+    
+    /* Progress */
+    .progress-bar {{ height: 4px; background: var(--border); border-radius: 2px; margin-bottom: 2rem; overflow: hidden; }}
+    .progress-fill {{ height: 100%; background: var(--accent); width: 33%; transition: width 0.3s ease; }}
+    
+    /* Step content */
+    .step-content {{ display: none; }}
+    .step-content.active {{ display: block; }}
+    
+    /* Validation hints */
+    .hint {{ font-size: 0.85rem; color: var(--muted); margin-top: 0.25rem; }}
+    .required::after {{ content: " *"; color: #dc3545; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 SinkHole</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/demo" class="nav-link">🎯 Demo</a>
+    <a href="/wizard" class="nav-link">🧙 Wizard</a>
+    <a href="/gallery" class="nav-link">🖼️ Gallery</a>
+  </nav>
+  <div class="container">
+    <h1>🧙 Multi-Step Form Wizard</h1>
+    <p class="subtitle">Complete this multi-step form. We analyze time per step, field interaction patterns, and completion behavior.</p>
+    
+    <div class="progress-bar">
+      <div class="progress-fill" id="progressBar"></div>
+    </div>
+    
+    <div class="wizard-steps">
+      <div class="step active" id="stepIndicator1">
+        <span class="step-number">1</span>Personal
+      </div>
+      <div class="step" id="stepIndicator2">
+        <span class="step-number">2</span>Address
+      </div>
+      <div class="step" id="stepIndicator3">
+        <span class="step-number">3</span>Preferences
+      </div>
+    </div>
+    
+    <div class="form-card">
+      <!-- Step 1: Personal Info -->
+      <div class="step-content active" id="step1">
+        <h2>Personal Information</h2>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="required">First Name</label>
+            <input type="text" id="firstName" placeholder="Enter first name" />
+          </div>
+          <div class="form-group">
+            <label class="required">Last Name</label>
+            <input type="text" id="lastName" placeholder="Enter last name" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="required">Email Address</label>
+          <input type="email" id="email" placeholder="your@email.com" />
+          <div class="hint">We'll send a verification email</div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Phone Number</label>
+            <input type="tel" id="phone" placeholder="+1 (555) 123-4567" />
+          </div>
+          <div class="form-group">
+            <label class="required">Date of Birth</label>
+            <input type="date" id="dob" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Occupation</label>
+          <select id="occupation">
+            <option value="">Select occupation</option>
+            <option>Developer</option>
+            <option>Designer</option>
+            <option>Manager</option>
+            <option>Student</option>
+            <option>Other</option>
+          </select>
+        </div>
+      </div>
+      
+      <!-- Step 2: Address -->
+      <div class="step-content" id="step2">
+        <h2>Address Information</h2>
+        <div class="form-group">
+          <label class="required">Street Address</label>
+          <input type="text" id="address1" placeholder="123 Main Street" />
+        </div>
+        <div class="form-group">
+          <label>Apartment/Unit</label>
+          <input type="text" id="address2" placeholder="Apt 4B" />
+        </div>
+        <div class="form-row three">
+          <div class="form-group">
+            <label class="required">City</label>
+            <input type="text" id="city" placeholder="City" />
+          </div>
+          <div class="form-group">
+            <label class="required">State</label>
+            <select id="state">
+              <option value="">Select</option>
+              <option>CA</option>
+              <option>NY</option>
+              <option>TX</option>
+              <option>FL</option>
+              <option>WA</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="required">ZIP Code</label>
+            <input type="text" id="zip" placeholder="12345" maxlength="5" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="required">Country</label>
+          <select id="country">
+            <option value="">Select country</option>
+            <option>United States</option>
+            <option>Canada</option>
+            <option>United Kingdom</option>
+            <option>Other</option>
+          </select>
+        </div>
+      </div>
+      
+      <!-- Step 3: Preferences -->
+      <div class="step-content" id="step3">
+        <h2>Preferences</h2>
+        <div class="form-group">
+          <label>How did you hear about us?</label>
+          <select id="referral">
+            <option value="">Select option</option>
+            <option>Search Engine</option>
+            <option>Social Media</option>
+            <option>Friend/Colleague</option>
+            <option>Advertisement</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Interests (Select all that apply)</label>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
+            <label><input type="checkbox" /> Technology</label>
+            <label><input type="checkbox" /> Security</label>
+            <label><input type="checkbox" /> AI/ML</label>
+            <label><input type="checkbox" /> Web Development</label>
+            <label><input type="checkbox" /> DevOps</label>
+            <label><input type="checkbox" /> Data Science</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Additional Comments</label>
+          <textarea id="comments" rows="4" placeholder="Tell us more about your needs..."></textarea>
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="agree" /> I agree to the terms and conditions</label>
+        </div>
+      </div>
+      
+      <div class="btn-group">
+        <button class="btn btn-secondary" id="prevBtn" onclick="changeStep(-1)" style="visibility: hidden;">Previous</button>
+        <button class="btn btn-primary" id="nextBtn" onclick="changeStep(1)">Next Step</button>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    let currentStep = 1;
+    const totalSteps = 3;
+    const stepTimes = {{}};
+    
+    function changeStep(direction) {{
+      stepTimes[currentStep] = (stepTimes[currentStep] || 0) + 1;
+      
+      document.getElementById(`step${{currentStep}}`).classList.remove('active');
+      document.getElementById(`stepIndicator${{currentStep}}`).classList.remove('active');
+      document.getElementById(`stepIndicator${{currentStep}}`).classList.add('completed');
+      
+      currentStep += direction;
+      
+      document.getElementById(`step${{currentStep}}`).classList.add('active');
+      document.getElementById(`stepIndicator${{currentStep}}`).classList.add('active');
+      
+      document.getElementById('prevBtn').style.visibility = currentStep === 1 ? 'hidden' : 'visible';
+      document.getElementById('nextBtn').textContent = currentStep === totalSteps ? 'Submit' : 'Next Step';
+      
+      document.getElementById('progressBar').style.width = (currentStep / totalSteps * 100) + '%';
+      
+      if (currentStep === totalSteps && direction === 1) {{
+        document.getElementById('nextBtn').onclick = submitForm;
+      }} else if (currentStep === totalSteps - 1 && direction === -1) {{
+        document.getElementById('nextBtn').onclick = () => changeStep(1);
+      }}
+    }}
+    
+    function submitForm() {{
+      alert('Form submitted! Time spent per step: ' + JSON.stringify(stepTimes));
+    }}
+  </script>
+</body>
+</html>"""
+
+
+def render_gallery_page(*, session_id: str) -> str:
+    """Image gallery with lazy loading and scroll interactions for behavioral testing."""
+    images = [
+        ("https://picsum.photos/400/300?random=1", "Abstract Pattern 1"),
+        ("https://picsum.photos/400/300?random=2", "Abstract Pattern 2"),
+        ("https://picsum.photos/400/300?random=3", "Abstract Pattern 3"),
+        ("https://picsum.photos/400/300?random=4", "Abstract Pattern 4"),
+        ("https://picsum.photos/400/300?random=5", "Abstract Pattern 5"),
+        ("https://picsum.photos/400/300?random=6", "Abstract Pattern 6"),
+        ("https://picsum.photos/400/300?random=7", "Abstract Pattern 7"),
+        ("https://picsum.photos/400/300?random=8", "Abstract Pattern 8"),
+        ("https://picsum.photos/400/300?random=9", "Abstract Pattern 9"),
+        ("https://picsum.photos/400/300?random=10", "Abstract Pattern 10"),
+        ("https://picsum.photos/400/300?random=11", "Abstract Pattern 11"),
+        ("https://picsum.photos/400/300?random=12", "Abstract Pattern 12"),
+    ]
+    
+    gallery_items = ""
+    for i, (url, title) in enumerate(images):
+        gallery_items += f'''
+        <div class="gallery-item" data-index="{i}">
+          <img src="{url}" alt="{html.escape(title)}" loading="lazy" />
+          <div class="gallery-overlay">
+            <span>{html.escape(title)}</span>
+          </div>
+        </div>
+        '''
+    
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Content Gallery - Behavioral Testing</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; font-size: 0.9rem; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }}
+    h1 {{ font-size: 1.75rem; margin-bottom: 0.5rem; }}
+    .subtitle {{ color: var(--muted); margin-bottom: 2rem; }}
+    
+    /* Gallery Grid */
+    .gallery-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; }}
+    .gallery-item {{ position: relative; border-radius: 12px; overflow: hidden; cursor: pointer; background: var(--surface); aspect-ratio: 4/3; transition: transform 0.3s, box-shadow 0.3s; }}
+    .gallery-item:hover {{ transform: translateY(-4px); box-shadow: 0 12px 24px rgba(0,0,0,0.15); }}
+    .gallery-item img {{ width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s; }}
+    .gallery-item:hover img {{ transform: scale(1.05); }}
+    .gallery-overlay {{ position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.7)); color: white; padding: 2rem 1rem 1rem; opacity: 0; transition: opacity 0.3s; }}
+    .gallery-item:hover .gallery-overlay {{ opacity: 1; }}
+    
+    /* Lightbox */
+    .lightbox {{ display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.9); z-index: 1000; justify-content: center; align-items: center; }}
+    .lightbox.active {{ display: flex; }}
+    .lightbox img {{ max-width: 90%; max-height: 90%; object-fit: contain; }}
+    .lightbox-close {{ position: absolute; top: 20px; right: 40px; color: white; font-size: 2rem; cursor: pointer; }}
+    .lightbox-nav {{ position: absolute; top: 50%; transform: translateY(-50%); color: white; font-size: 3rem; cursor: pointer; padding: 1rem; }}
+    .lightbox-prev {{ left: 20px; }}
+    .lightbox-next {{ right: 20px; }}
+    
+    /* Filter buttons */
+    .filter-bar {{ display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }}
+    .filter-btn {{ padding: 0.5rem 1rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); cursor: pointer; font-size: 0.9rem; }}
+    .filter-btn.active {{ background: var(--accent); color: white; border-color: var(--accent); }}
+    
+    /* Scroll indicator */
+    .scroll-info {{ text-align: center; padding: 2rem; color: var(--muted); }}
+    .scroll-progress {{ height: 4px; background: var(--accent); position: fixed; top: 0; left: 0; width: 0%; z-index: 100; transition: width 0.1s; }}
+  </style>
+</head>
+<body>
+  <div class="scroll-progress" id="scrollProgress"></div>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 SinkHole</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/demo" class="nav-link">🎯 Demo</a>
+    <a href="/wizard" class="nav-link">🧙 Wizard</a>
+    <a href="/gallery" class="nav-link">🖼️ Gallery</a>
+  </nav>
+  <div class="container">
+    <h1>🖼️ Content Gallery</h1>
+    <p class="subtitle">Scroll through images and click to view. We analyze scroll depth, click patterns, and image viewing time.</p>
+    
+    <div class="filter-bar">
+      <button class="filter-btn active" onclick="filterGallery('all')">All</button>
+      <button class="filter-btn" onclick="filterGallery('pattern')">Patterns</button>
+      <button class="filter-btn" onclick="filterGallery('nature')">Nature</button>
+      <button class="filter-btn" onclick="filterGallery('urban')">Urban</button>
+    </div>
+    
+    <div class="gallery-grid" id="gallery">
+      {gallery_items}
+    </div>
+    
+    <div class="scroll-info">
+      <p>📜 Continue scrolling to load more content</p>
+      <p>Page scroll depth: <span id="scrollDepth">0</span>%</p>
+    </div>
+  </div>
+  
+  <!-- Lightbox -->
+  <div class="lightbox" id="lightbox">
+    <span class="lightbox-close" onclick="closeLightbox()">&times;</span>
+    <span class="lightbox-nav lightbox-prev" onclick="changeImage(-1)">&#8249;</span>
+    <span class="lightbox-nav lightbox-next" onclick="changeImage(1)">&#8250;</span>
+    <img id="lightboxImg" src="" alt="" />
+  </div>
+  
+  <script>
+    // Gallery item click tracking
+    document.querySelectorAll('.gallery-item').forEach((item, index) => {{
+      item.addEventListener('click', () => openLightbox(index));
+    }});
+    
+    // Scroll progress
+    window.addEventListener('scroll', () => {{
+      const scrolled = (window.scrollY / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+      document.getElementById('scrollProgress').style.width = scrolled + '%';
+      document.getElementById('scrollDepth').textContent = Math.round(scrolled);
+    }}, {{passive: true}});
+    
+    // Lightbox
+    let currentImage = 0;
+    const totalImages = document.querySelectorAll('.gallery-item').length;
+    
+    function openLightbox(index) {{
+      currentImage = index;
+      const img = document.querySelectorAll('.gallery-item')[index].querySelector('img');
+      document.getElementById('lightboxImg').src = img.src;
+      document.getElementById('lightbox').classList.add('active');
+    }}
+    
+    function closeLightbox() {{
+      document.getElementById('lightbox').classList.remove('active');
+    }}
+    
+    function changeImage(direction) {{
+      currentImage = (currentImage + direction + totalImages) % totalImages;
+      const img = document.querySelectorAll('.gallery-item')[currentImage].querySelector('img');
+      document.getElementById('lightboxImg').src = img.src;
+    }}
+    
+    // Keyboard navigation
+    document.addEventListener('keydown', (e) => {{
+      if (!document.getElementById('lightbox').classList.contains('active')) return;
+      if (e.key === 'Escape') closeLightbox();
+      if (e.key === 'ArrowLeft') changeImage(-1);
+      if (e.key === 'ArrowRight') changeImage(1);
+    }});
+    
+    // Filter buttons
+    function filterGallery(type) {{
+      document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+      event.target.classList.add('active');
+    }}
+  </script>
+</body>
+</html>"""
+def render_demo_page(*, session_id: str) -> str:
+    """Full interactive demo page for Stage 2 behavioral testing with targets, typing, and gestures."""
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Behavioral Testing Demo - SinkHole</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; --accent-2: #1aa179; --danger: #dc3545; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; font-size: 0.9rem; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 1000px; margin: 0 auto; padding: 2rem 1rem; }}
+    h1 {{ font-size: 2rem; margin-bottom: 0.5rem; }}
+    .subtitle {{ color: var(--muted); margin-bottom: 2rem; }}
+    .demo-section {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }}
+    .demo-section h2 {{ margin: 0 0 1rem; font-size: 1.25rem; color: var(--accent); }}
+    
+    /* Target Game */
+    .target-arena {{ position: relative; height: 300px; background: linear-gradient(135deg, #e7f3ff 0%, #f0f9ff 100%); border-radius: 12px; overflow: hidden; cursor: crosshair; margin: 1rem 0; }}
+    .game-target {{ position: absolute; width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); cursor: pointer; transition: all 0.2s ease; display: grid; place-items: center; color: white; font-weight: 700; box-shadow: 0 4px 12px rgba(11,99,206,0.4); }}
+    .game-target:hover {{ transform: scale(1.15); }}
+    .game-target.hit {{ transform: scale(0); opacity: 0; }}
+    .score-board {{ display: flex; gap: 2rem; margin-bottom: 1rem; font-size: 0.9rem; }}
+    .score-item {{ background: #e7f3ff; padding: 0.5rem 1rem; border-radius: 6px; }}
+    .score-item strong {{ color: var(--accent); }}
+    
+    /* Typing Analysis */
+    .typing-test {{ background: #f8f9fa; padding: 1.5rem; border-radius: 8px; }}
+    .typing-display {{ font-size: 1.25rem; font-family: ui-monospace, monospace; margin-bottom: 1rem; padding: 1rem; background: white; border-radius: 8px; border: 2px solid var(--border); }}
+    .typing-display .correct {{ color: var(--accent-2); }}
+    .typing-display .incorrect {{ color: var(--danger); background: #ffebee; }}
+    .typing-display .pending {{ color: var(--muted); }}
+    .typing-stats {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-top: 1rem; }}
+    .stat-box {{ text-align: center; padding: 0.75rem; background: white; border-radius: 6px; }}
+    .stat-box .value {{ font-size: 1.25rem; font-weight: 700; color: var(--accent); }}
+    .stat-box .label {{ font-size: 0.75rem; color: var(--muted); }}
+    
+    /* Gesture Area */
+    .gesture-area {{ height: 200px; background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%); border-radius: 12px; position: relative; overflow: hidden; touch-action: none; }}
+    .gesture-trail {{ position: absolute; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); opacity: 0.6; pointer-events: none; }}
+    
+    /* Drag and Drop */
+    .drag-container {{ display: flex; gap: 1rem; min-height: 120px; }}
+    .drop-zone {{ flex: 1; border: 2px dashed var(--border); border-radius: 8px; padding: 1rem; background: #f8f9fa; }}
+    .drop-zone.drag-over {{ border-color: var(--accent); background: #e7f3ff; }}
+    .draggable {{ padding: 0.75rem 1rem; background: white; border: 1px solid var(--border); border-radius: 6px; cursor: move; margin-bottom: 0.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+    .draggable.dragging {{ opacity: 0.5; }}
+    
+    /* Buttons for click analysis */
+    .button-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; }}
+    .test-btn {{ padding: 1rem; border: none; border-radius: 8px; background: var(--accent); color: white; cursor: pointer; font-weight: 500; transition: all 0.1s; }}
+    .test-btn:hover {{ background: #0952a8; transform: scale(1.02); }}
+    .test-btn:active {{ transform: scale(0.98); }}
+    .test-btn.clicked {{ background: var(--accent-2); }}
+    
+    /* Scroll challenge */
+    .scroll-challenge {{ height: 150px; overflow-y: scroll; border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: white; }}
+    .scroll-content {{ height: 600px; }}
+    .scroll-marker {{ padding: 1rem; margin: 0.5rem 0; background: #f0f0f0; border-radius: 4px; text-align: center; }}
+    .scroll-marker.reached {{ background: var(--accent-2); color: white; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 SinkHole</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/demo" class="nav-link">🎯 Demo</a>
+    <a href="/wizard" class="nav-link">🧙 Wizard</a>
+    <a href="/gallery" class="nav-link">🖼️ Gallery</a>
+  </nav>
+  <div class="container">
+    <h1>🎯 Behavioral Testing Playground</h1>
+    <p class="subtitle">Interact with these elements to test Stage 2 behavioral analysis detection.</p>
+    
+    <div class="demo-section">
+      <h2>Click Target Challenge</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">Click the moving targets. We analyze click timing, accuracy, and mouse approach patterns.</p>
+      <div class="score-board">
+        <div class="score-item">Hits: <strong id="hitCount">0</strong></div>
+        <div class="score-item">Misses: <strong id="missCount">0</strong></div>
+        <div class="score-item">Accuracy: <strong id="accuracy">0%</strong></div>
+        <div class="score-item">Avg Response: <strong id="avgTime">0ms</strong></div>
+      </div>
+      <div class="target-arena" id="targetArena"></div>
+    </div>
+    
+    <div class="demo-section">
+      <h2>Keystroke Dynamics Test</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">Type the text below. We measure dwell time, flight time, and typing rhythm.</p>
+      <div class="typing-test">
+        <div class="typing-display" id="typingDisplay">
+          <span class="pending">The quick brown fox jumps over the lazy dog</span>
+        </div>
+        <input type="text" id="typingInput" style="width: 100%; padding: 0.75rem; font-size: 1rem; border: 2px solid var(--border); border-radius: 6px;" placeholder="Start typing..." autocomplete="off" />
+        <div class="typing-stats">
+          <div class="stat-box"><div class="value" id="wpm">0</div><div class="label">WPM</div></div>
+          <div class="stat-box"><div class="value" id="cpm">0</div><div class="label">CPM</div></div>
+          <div class="stat-box"><div class="value" id="accuracyType">100%</div><div class="label">Accuracy</div></div>
+          <div class="stat-box"><div class="value" id="consistency">0</div><div class="label">Consistency</div></div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="demo-section">
+      <h2>Gesture Tracking Area</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">Move your mouse or touch through this area. We track path, velocity, and curvature.</p>
+      <div class="gesture-area" id="gestureArea"></div>
+    </div>
+    
+    <div class="demo-section">
+      <h2>Sequential Button Test</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">Click buttons in order (1-8). We analyze click timing patterns and intervals.</p>
+      <div class="button-grid" id="buttonGrid"></div>
+    </div>
+    
+    <div class="demo-section">
+      <h2>Scroll Depth Challenge</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">Scroll to the bottom. We detect scroll velocity, momentum, and reading patterns.</p>
+      <div class="scroll-challenge" id="scrollChallenge">
+        <div class="scroll-content">
+          <div class="scroll-marker" data-depth="20">📍 20% depth marker</div>
+          <div class="scroll-marker" data-depth="40">📍 40% depth marker</div>
+          <div class="scroll-marker" data-depth="60">📍 60% depth marker</div>
+          <div class="scroll-marker" data-depth="80">📍 80% depth marker</div>
+          <div class="scroll-marker" data-depth="100">🎉 100% - You reached the bottom!</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="demo-section">
+      <h2>Drag & Drop Test</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">Drag items between zones. We track drag path, hesitation, and drop accuracy.</p>
+      <div class="drag-container">
+        <div class="drop-zone" data-zone="left">
+          <div class="draggable" draggable="true">Item A</div>
+          <div class="draggable" draggable="true">Item B</div>
+          <div class="draggable" draggable="true">Item C</div>
+        </div>
+        <div class="drop-zone" data-zone="right"></div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // Target game
+    let hits = 0, misses = 0, totalTime = 0, targetCount = 0;
+    const arena = document.getElementById('targetArena');
+    
+    function spawnGameTarget() {{
+      const target = document.createElement('div');
+      target.className = 'game-target';
+      target.textContent = '★';
+      const startTime = Date.now();
+      target.style.left = Math.random() * (arena.clientWidth - 60) + 10 + 'px';
+      target.style.top = Math.random() * (arena.clientHeight - 60) + 10 + 'px';
+      
+      let hit = false;
+      target.onclick = (e) => {{
+        e.stopPropagation();
+        if (hit) return;
+        hit = true;
+        hits++;
+        totalTime += Date.now() - startTime;
+        updateScore();
+        target.classList.add('hit');
+        setTimeout(() => target.remove(), 200);
+        setTimeout(spawnGameTarget, 300 + Math.random() * 400);
+      }};
+      
+      arena.appendChild(target);
+      targetCount++;
+      
+      // Move target periodically
+      const moveInterval = setInterval(() => {{
+        if (hit || !target.parentNode) {{ clearInterval(moveInterval); return; }}
+        target.style.left = Math.max(10, Math.min(arena.clientWidth - 60, parseInt(target.style.left) + (Math.random() - 0.5) * 40)) + 'px';
+        target.style.top = Math.max(10, Math.min(arena.clientHeight - 60, parseInt(target.style.top) + (Math.random() - 0.5) * 40)) + 'px';
+      }}, 600);
+    }}
+    
+    arena.onclick = () => {{
+      misses++;
+      updateScore();
+    }};
+    
+    function updateScore() {{
+      document.getElementById('hitCount').textContent = hits;
+      document.getElementById('missCount').textContent = misses;
+      const total = hits + misses;
+      document.getElementById('accuracy').textContent = total ? Math.round(hits / total * 100) + '%' : '0%';
+      document.getElementById('avgTime').textContent = hits ? Math.round(totalTime / hits) + 'ms' : '0ms';
+    }}
+    
+    spawnGameTarget();
+    
+    // Typing test
+    const targetText = "The quick brown fox jumps over the lazy dog";
+    const typingInput = document.getElementById('typingInput');
+    const typingDisplay = document.getElementById('typingDisplay');
+    let keystrokes = [], startTime = null;
+    
+    typingInput.addEventListener('focus', () => {{
+      if (!startTime) startTime = Date.now();
+    }});
+    
+    typingInput.addEventListener('keydown', (e) => {{
+      keystrokes.push({{key: e.key, time: Date.now(), type: 'down'}});
+    }});
+    
+    typingInput.addEventListener('keyup', (e) => {{
+      keystrokes.push({{key: e.key, time: Date.now(), type: 'up'}});
+    }});
+    
+    typingInput.addEventListener('input', () => {{
+      const typed = typingInput.value;
+      let html = '';
+      for (let i = 0; i < targetText.length; i++) {{
+        if (i < typed.length) {{
+          html += typed[i] === targetText[i] ? `<span class="correct">${{targetText[i]}}</span>` : `<span class="incorrect">${{typed[i]}}</span>`;
+        }} else {{
+          html += `<span class="pending">${{targetText[i]}}</span>`;
+        }}
+      }}
+      typingDisplay.innerHTML = html;
+      
+      // Update stats
+      if (startTime) {{
+        const elapsed = (Date.now() - startTime) / 60000;
+        const wpm = Math.round((typed.length / 5) / Math.max(elapsed, 0.001));
+        const cpm = Math.round(typed.length / Math.max(elapsed, 0.001));
+        document.getElementById('wpm').textContent = wpm;
+        document.getElementById('cpm').textContent = cpm;
+      }}
+    }});
+    
+    // Gesture trail
+    const gestureArea = document.getElementById('gestureArea');
+    gestureArea.addEventListener('mousemove', (e) => {{
+      const rect = gestureArea.getBoundingClientRect();
+      const trail = document.createElement('div');
+      trail.className = 'gesture-trail';
+      trail.style.left = (e.clientX - rect.left - 10) + 'px';
+      trail.style.top = (e.clientY - rect.top - 10) + 'px';
+      gestureArea.appendChild(trail);
+      setTimeout(() => trail.remove(), 500);
+    }}, {{passive: true}});
+    
+    // Sequential buttons
+    const buttonGrid = document.getElementById('buttonGrid');
+    for (let i = 1; i <= 8; i++) {{
+      const btn = document.createElement('button');
+      btn.className = 'test-btn';
+      btn.textContent = i;
+      btn.onclick = function() {{
+        this.classList.add('clicked');
+        setTimeout(() => this.classList.remove('clicked'), 200);
+      }};
+      buttonGrid.appendChild(btn);
+    }}
+    
+    // Scroll challenge
+    const scrollChallenge = document.getElementById('scrollChallenge');
+    scrollChallenge.addEventListener('scroll', () => {{
+      const scrollPercent = (scrollChallenge.scrollTop / (scrollChallenge.scrollHeight - scrollChallenge.clientHeight)) * 100;
+      document.querySelectorAll('.scroll-marker').forEach(marker => {{
+        const depth = parseInt(marker.dataset.depth);
+        if (scrollPercent >= depth - 5) {{
+          marker.classList.add('reached');
+        }}
+      }});
+    }}, {{passive: true}});
+    
+    // Drag and drop
+    let dragged = null;
+    document.querySelectorAll('.draggable').forEach(item => {{
+      item.addEventListener('dragstart', (e) => {{
+        dragged = item;
+        item.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      }});
+      item.addEventListener('dragend', () => {{
+        item.classList.remove('dragging');
+        dragged = null;
+      }});
+    }});
+    
+    document.querySelectorAll('.drop-zone').forEach(zone => {{
+      zone.addEventListener('dragover', (e) => {{
+        e.preventDefault();
+        zone.classList.add('drag-over');
+      }});
+      zone.addEventListener('dragleave', () => {{
+        zone.classList.remove('drag-over');
+      }});
+      zone.addEventListener('drop', (e) => {{
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        if (dragged) zone.appendChild(dragged);
+      }});
+    }});
+  </script>
+</body>
+</html>"""
+def render_home_page(*, session_id: str) -> str:
+    """Enhanced home page with rich interactive elements for Stage 2 behavioral testing."""
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SinkHole - Advanced Bot Detection Demo</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; --accent-2: #1aa179; --danger: #dc3545; --warning: #ffc107; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; font-size: 0.9rem; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }}
+    .hero {{ background: linear-gradient(135deg, var(--accent) 0%, #1a5fb4 100%); color: white; padding: 3rem 2rem; border-radius: 16px; margin-bottom: 2rem; text-align: center; }}
+    .hero h1 {{ margin: 0 0 1rem; font-size: 2.5rem; }}
+    .hero p {{ margin: 0 0 1.5rem; font-size: 1.1rem; opacity: 0.9; }}
+    .cta-btn {{ background: white; color: var(--accent); border: none; padding: 0.875rem 2rem; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; margin: 0.5rem; }}
+    .cta-btn:hover {{ transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }}
+    .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; transition: transform 0.2s, box-shadow 0.2s; }}
+    .card:hover {{ transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }}
+    .card h3 {{ margin: 0 0 0.75rem; color: var(--accent); }}
+    .card p {{ margin: 0 0 1rem; color: var(--muted); font-size: 0.9rem; }}
+    .card-link {{ color: var(--accent); text-decoration: none; font-weight: 500; font-size: 0.9rem; }}
+    .card-link:hover {{ text-decoration: underline; }}
+    .tracking-zone {{ background: linear-gradient(135deg, #e7f3ff 0%, #f0f9ff 100%); border: 2px dashed var(--accent); border-radius: 12px; padding: 2rem; text-align: center; margin: 2rem 0; min-height: 200px; position: relative; overflow: hidden; cursor: crosshair; }}
+    .tracking-zone h3 {{ margin: 0 0 0.5rem; color: var(--accent); }}
+    .tracking-zone .coords {{ font-family: monospace; color: var(--muted); font-size: 0.85rem; position: absolute; top: 10px; right: 10px; }}
+    .tracking-target {{ position: absolute; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); cursor: pointer; transition: all 0.3s ease; display: grid; place-items: center; color: white; font-weight: 700; box-shadow: 0 2px 8px rgba(11,99,206,0.4); }}
+    .tracking-target:hover {{ transform: scale(1.2); background: var(--accent-2); }}
+    .demo-form {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin: 2rem 0; }}
+    .demo-form h3 {{ margin: 0 0 1rem; }}
+    .form-group {{ margin-bottom: 1rem; }}
+    .form-group label {{ display: block; margin-bottom: 0.375rem; font-weight: 500; font-size: 0.9rem; }}
+    .form-group input, .form-group textarea, .form-group select {{ width: 100%; padding: 0.625rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; font-family: inherit; }}
+    .form-group input:focus, .form-group textarea:focus, .form-group select:focus {{ outline: none; border-color: var(--accent); }}
+    .form-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }}
+    .btn {{ padding: 0.625rem 1.25rem; border: none; border-radius: 6px; font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all 0.2s; }}
+    .btn-primary {{ background: var(--accent); color: white; }}
+    .btn-primary:hover {{ background: #0952a8; }}
+    .btn-secondary {{ background: var(--border); color: var(--text); }}
+    .btn-secondary:hover {{ background: #c1c9d0; }}
+    .tabs {{ display: flex; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 2px solid var(--border); }}
+    .tab {{ padding: 0.75rem 1.25rem; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer; font-weight: 500; color: var(--muted); }}
+    .tab.active {{ color: var(--accent); border-bottom-color: var(--accent); }}
+    .tab:hover {{ color: var(--accent); }}
+    .tab-content {{ display: none; }}
+    .tab-content.active {{ display: block; }}
+    .scroll-demo {{ max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: var(--surface); }}
+    .scroll-item {{ padding: 1rem; border-bottom: 1px solid var(--border); }}
+    .scroll-item:last-child {{ border-bottom: none; }}
+    .status-bar {{ background: #e7f3ff; border-left: 4px solid var(--accent); padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }}
+    .status-bar h4 {{ margin: 0 0 0.5rem; }}
+    .status-bar p {{ margin: 0; font-size: 0.9rem; color: var(--muted); }}
+    .accordion {{ border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}
+    .accordion-item {{ border-bottom: 1px solid var(--border); }}
+    .accordion-item:last-child {{ border-bottom: none; }}
+    .accordion-header {{ padding: 1rem; background: var(--surface); cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: 500; }}
+    .accordion-header:hover {{ background: #f8f9fa; }}
+    .accordion-content {{ max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }}
+    .accordion-content.open {{ max-height: 500px; }}
+    .accordion-body {{ padding: 1rem; background: var(--bg); }}
+    .accordion-icon {{ transition: transform 0.3s; }}
+    .accordion-icon.open {{ transform: rotate(180deg); }}
+    .dropdown {{ position: relative; display: inline-block; }}
+    .dropdown-btn {{ background: var(--accent); color: white; padding: 0.625rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; }}
+    .dropdown-content {{ display: none; position: absolute; background: var(--surface); min-width: 160px; box-shadow: 0 8px 16px rgba(0,0,0,0.1); z-index: 1; border-radius: 8px; border: 1px solid var(--border); }}
+    .dropdown-content a {{ color: var(--text); padding: 0.75rem 1rem; text-decoration: none; display: block; font-size: 0.9rem; }}
+    .dropdown-content a:hover {{ background: #f8f9fa; }}
+    .dropdown.show .dropdown-content {{ display: block; }}
+    .slider-container {{ margin: 1rem 0; }}
+    .slider {{ width: 100%; height: 6px; border-radius: 3px; background: var(--border); outline: none; -webkit-appearance: none; }}
+    .slider::-webkit-slider-thumb {{ -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); cursor: pointer; }}
+    .check-group {{ display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }}
+    .check-item {{ display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }}
+    .progress-bar {{ height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 1rem 0; }}
+    .progress-fill {{ height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); width: 0%; transition: width 0.5s ease; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 SinkHole</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/search" class="nav-link">Search</a>
+    <a href="/demo" class="nav-link">🎯 Demo</a>
+    <a href="/wizard" class="nav-link">🧙 Wizard</a>
+    <a href="/gallery" class="nav-link">🖼️ Gallery</a>
+  </nav>
+  <div class="container">
+    <div class="hero">
+      <h1>Advanced Bot Detection Platform</h1>
+      <p>Experience our multi-layered behavioral analysis system.</p>
+      <button class="cta-btn" onclick="document.getElementById('interactive-zone').scrollIntoView({{behavior: 'smooth'}})">Try Interactive Demo</button>
+      <button class="cta-btn" onclick="location.href='/about'" style="background: transparent; color: white; border: 2px solid white;">Learn More</button>
+    </div>
+    <div id="interactive-zone" class="tracking-zone">
+      <h3>🖱️ Mouse Tracking Zone</h3>
+      <p>Move your mouse here. We analyze movement patterns, velocity, and entropy.</p>
+      <div class="coords" id="mouseCoords">X: 0, Y: 0</div>
+      <div id="trackingTargets"></div>
+    </div>
+    <div class="demo-form">
+      <h3>⌨️ Keystroke Dynamics Demo</h3>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">Type in the fields below. We measure dwell time and typing rhythm.</p>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Full Name *</label>
+          <input type="text" id="nameField" placeholder="Type your full name..." />
+        </div>
+        <div class="form-group">
+          <label>Email *</label>
+          <input type="email" id="emailField" placeholder="your@email.com" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Bio (multi-line typing test)</label>
+        <textarea id="bioField" rows="3" placeholder="Type a short bio..."></textarea>
+      </div>
+      <div class="check-group">
+        <label class="check-item"><input type="checkbox" /> Option A</label>
+        <label class="check-item"><input type="checkbox" /> Option B</label>
+        <label class="check-item"><input type="radio" name="radio" value="1" /> Radio 1</label>
+        <label class="check-item"><input type="radio" name="radio" value="2" /> Radio 2</label>
+      </div>
+      <div class="slider-container">
+        <label>Slider Test: <span id="sliderValue">50</span>%</label>
+        <input type="range" class="slider" id="gestureSlider" min="0" max="100" value="50" />
+      </div>
+      <button class="btn btn-primary" onclick="alert('Demo submitted!')">Submit Demo</button>
+      <button class="btn btn-secondary" onclick="document.querySelectorAll('input, textarea').forEach(el => el.value = '')">Reset</button>
+    </div>
+    <div class="card">
+      <h3>📑 Tab Interface - Click Pattern Analysis</h3>
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab(this, 'tab1')">Overview</button>
+        <button class="tab" onclick="switchTab(this, 'tab2')">Features</button>
+        <button class="tab" onclick="switchTab(this, 'tab3')">Pricing</button>
+      </div>
+      <div id="tab1" class="tab-content active">
+        <p>Tab 1 content - We track tab switching patterns and timing.</p>
+        <div class="progress-bar"><div class="progress-fill" style="width: 75%"></div></div>
+      </div>
+      <div id="tab2" class="tab-content">
+        <p>Tab 2 content - Multiple tabs test sequential click patterns.</p>
+      </div>
+      <div id="tab3" class="tab-content">
+        <p>Tab 3 content - Humans show variable dwell times between tab switches.</p>
+      </div>
+    </div>
+    <div class="grid" style="margin-top: 1.5rem;">
+      <div class="card">
+        <h3>🎯 Interactive Demo</h3>
+        <p>Full behavioral testing playground with targets and gesture areas.</p>
+        <a href="/demo" class="card-link">Try Demo →</a>
+      </div>
+      <div class="card">
+        <h3>🧙 Form Wizard</h3>
+        <p>Multi-step form with complex interactions for pattern testing.</p>
+        <a href="/wizard" class="card-link">Start Wizard →</a>
+      </div>
+      <div class="card">
+        <h3>🖼️ Content Gallery</h3>
+        <p>Image gallery with lazy loading and scroll-based interactions.</p>
+        <a href="/gallery" class="card-link">View Gallery →</a>
+      </div>
+    </div>
+  </div>
+  <script>
+    const trackingZone = document.querySelector('.tracking-zone');
+    const coordsDisplay = document.getElementById('mouseCoords');
+    trackingZone.addEventListener('mousemove', (e) => {{
+      const rect = trackingZone.getBoundingClientRect();
+      coordsDisplay.textContent = `X: ${{Math.round(e.clientX - rect.left)}}, Y: ${{Math.round(e.clientY - rect.top)}}`;
+    }}, {{passive: true}});
+    function spawnTarget() {{
+      const container = document.getElementById('trackingTargets');
+      const target = document.createElement('div');
+      target.className = 'tracking-target';
+      target.textContent = '★';
+      target.style.left = Math.random() * 80 + 10 + '%';
+      target.style.top = Math.random() * 60 + 20 + '%';
+      target.onclick = () => {{
+        target.style.transform = 'scale(0)';
+        setTimeout(() => target.remove(), 300);
+        setTimeout(spawnTarget, 500);
+      }};
+      container.appendChild(target);
+    }}
+    spawnTarget();
+    function switchTab(tab, tabId) {{
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+    }}
+    document.getElementById('gestureSlider').addEventListener('input', (e) => {{
+      document.getElementById('sliderValue').textContent = e.target.value;
+    }});
+  </script>
+</body>
+</html>"""
 
 def render_test_suite_page(
     session_id: str,

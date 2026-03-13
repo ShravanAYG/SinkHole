@@ -25,8 +25,11 @@ from .html import (
     render_contact_page,
     render_dashboard,
     render_decoy_page,
+    render_demo_page,
+    render_gallery_page,
     render_gate_blocked_page,
     render_gate_challenge_page,
+    render_home_page,
     render_origin_page,
     render_products_page,
     render_recovery_page,
@@ -35,6 +38,7 @@ from .html import (
     render_bot_caught_page,
     render_test_suite_page,
     render_enhanced_telemetry_page,
+    render_wizard_page,
     sdk_script,
 )
 from .js_verify_page import render_js_verify_page
@@ -1364,7 +1368,79 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return response
 
         links = _make_links(cfg, session_id, ip_hash, page_id=0)
-        page = render_origin_page(session_id=session_id, page_id=0, links=links)
+        page = render_home_page(session_id=session_id)
+        response = HTMLResponse(page)
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/demo")
+    async def demo_page(request: Request) -> Response:
+        """Interactive demo page with behavioral testing elements."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/demo", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/demo", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
+
+        page = render_demo_page(session_id=session_id)
+        response = HTMLResponse(page)
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/wizard")
+    async def wizard_page(request: Request) -> Response:
+        """Multi-step form wizard for behavioral pattern testing."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/wizard", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/wizard", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
+
+        page = render_wizard_page(session_id=session_id)
+        response = HTMLResponse(page)
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/gallery")
+    async def gallery_page(request: Request) -> Response:
+        """Image gallery with scroll interactions for behavioral testing."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/gallery", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/gallery", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/content/archive/0?ref={session_id[:8]}", status_code=302)
+
+        page = render_gallery_page(session_id=session_id)
         response = HTMLResponse(page)
         _attach_cookie(response, cfg, session_id)
         return response
