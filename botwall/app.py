@@ -28,8 +28,8 @@ from .models import (
 )
 from .proof import issue_proof_token, verify_proof_token
 from .scoring import apply_score, decide, score_beacon, score_request, score_telemetry_match, score_traversal
-from .state import StoreManager, init_store
 from .telemetry import export_feed, fingerprint_from_beacon, parse_peer_secrets, verify_import
+from .state import StoreManager, init_store
 from .traversal import issue_traversal_token, verify_traversal_token
 
 
@@ -122,7 +122,7 @@ def _evaluate_request(
     ip_hash = hash_client_ip(client_ip, settings.secret_key)
     session = store.store.load_session(session_id, ip_hash)
 
-    req_outcome = score_request(_request_meta(request), session, now=now)
+    req_outcome = score_request(_request_meta(request), session, now=now, weights=settings.weights)
     apply_score(session, req_outcome, now=now)
 
     trace = request.query_params.get("bw_trace")
@@ -137,7 +137,7 @@ def _evaluate_request(
                 page_path=target_path,
                 now=now,
             )
-        trav_outcome = score_traversal(session, valid=valid)
+        trav_outcome = score_traversal(session, valid=valid, weights=settings.weights)
         apply_score(session, trav_outcome, now=now)
 
     # Optional mesh penalty if known suspicious behavioral fingerprint has appeared.
@@ -153,7 +153,14 @@ def _evaluate_request(
         except Exception:
             pass
 
-    decision, reasons = decide(session, sequence_window=settings.sequence_window, now=now)
+    decision, reasons = decide(
+        session,
+        sequence_window=settings.sequence_window,
+        now=now,
+        allow_threshold=settings.allow_threshold,
+        decoy_threshold=settings.decoy_threshold,
+        observe_threshold=settings.observe_threshold,
+    )
     _record_decision(session, decision, reasons + req_outcome.reasons)
     session["last_user_agent"] = request.headers.get("user-agent", "")
     session["updated_at"] = now
@@ -166,7 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Botwall API", version="0.1.0")
     cfg = settings or load_settings()
     store = init_store(cfg.redis_enabled, cfg.redis_url)
-    peer_secrets = parse_peer_secrets(os.getenv("BOTWALL_PEER_SECRETS"))
+    peer_secrets = parse_peer_secrets(cfg.peer_secrets_raw or os.getenv("BOTWALL_PEER_SECRETS"))
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -253,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not store.store.mark_once("proof_jti", str(proof_payload.get("jti")), cfg.proof_ttl_seconds * 2):
             raise HTTPException(status_code=409, detail="proof replay detected")
 
-        beacon_outcome = score_beacon(payload.beacon, request_ua=request.headers.get("user-agent"))
+        beacon_outcome = score_beacon(payload.beacon, request_ua=request.headers.get("user-agent"), weights=cfg.weights)
         apply_score(session, beacon_outcome, now=now_ts())
 
         session["proof_valid"] = int(session.get("proof_valid", 0)) + 1
@@ -261,7 +268,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         events.append(payload.beacon.model_dump(mode="json"))
         session["events"] = events[-64:]
 
-        decision, reasons = decide(session, sequence_window=cfg.sequence_window, now=now_ts())
+        decision, reasons = decide(
+            session,
+            sequence_window=cfg.sequence_window,
+            now=now_ts(),
+            allow_threshold=cfg.allow_threshold,
+            decoy_threshold=cfg.decoy_threshold,
+            observe_threshold=cfg.observe_threshold,
+        )
         _record_decision(session, decision, reasons + beacon_outcome.reasons)
         store.store.save_session(session)
 
@@ -283,7 +297,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ip_hash = hash_client_ip(client_ip, cfg.secret_key)
         session = store.store.load_session(session_id, ip_hash)
 
-        outcome = score_beacon(payload, request_ua=request.headers.get("user-agent"))
+        outcome = score_beacon(payload, request_ua=request.headers.get("user-agent"), weights=cfg.weights)
         apply_score(session, outcome, now=now_ts())
         events = session.setdefault("events", [])
         events.append(payload.model_dump(mode="json"))
@@ -321,7 +335,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/bw/decoy/{node_id}")
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
-        node = build_node(session_id, node_id % 60)
+        node = build_node(session_id, node_id % cfg.decoy_max_nodes)
         response = HTMLResponse(render_decoy_page(node=node, session_id=session_id))
         response.headers["x-botwall-decision"] = "decoy"
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
@@ -362,7 +376,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "iph": ip_hash,
                 "jti": uuid.uuid4().hex,
                 "iat": now,
-                "exp": now + 180,
+                "exp": now + cfg.recovery_ttl_seconds,
             },
             cfg.secret_key,
         )
@@ -404,7 +418,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not store.store.mark_once("recovery_jti", jti, 300):
             raise HTTPException(status_code=409, detail="recovery token replay detected")
 
-        session["allow_until"] = now + 300
+        session["allow_until"] = now + cfg.recovery_allow_seconds
         session["score"] = float(session.get("score", 0.0) + 25.0)
         session.setdefault("reasons", []).append("recovery:completed")
         store.store.save_session(session)
@@ -450,6 +464,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
+    @app.get("/bw/config")
+    async def bw_config_dump() -> JSONResponse:
+        """Expose active configuration for operators (omits secrets)."""
+        return JSONResponse({
+            "server": {"host": cfg.app_host, "port": cfg.app_port},
+            "scoring": {
+                "allow_threshold": cfg.allow_threshold,
+                "decoy_threshold": cfg.decoy_threshold,
+                "observe_threshold": cfg.observe_threshold,
+                "sequence_window": cfg.sequence_window,
+            },
+            "tokens": {
+                "proof_ttl_seconds": cfg.proof_ttl_seconds,
+                "traversal_ttl_seconds": cfg.traversal_ttl_seconds,
+                "recovery_ttl_seconds": cfg.recovery_ttl_seconds,
+                "gate_ttl_seconds": cfg.gate_ttl_seconds,
+            },
+            "pow": {
+                "default_difficulty": cfg.pow_default_difficulty,
+                "elevated_difficulty": cfg.pow_elevated_difficulty,
+                "max_solve_seconds": cfg.pow_max_solve_seconds,
+            },
+            "decoy": {
+                "max_nodes": cfg.decoy_max_nodes,
+                "min_links": cfg.decoy_min_links,
+                "max_links": cfg.decoy_max_links,
+            },
+            "telemetry": {"enabled": cfg.telemetry_enabled},
+            "store_backend": store.backend,
+        })
+
     @app.get("/")
     async def home(request: Request) -> Response:
         session, session_id, reasons, decision, ip_hash = _evaluate_request(
@@ -488,7 +533,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
         if decision == "decoy":
-            response = RedirectResponse(url=f"/bw/decoy/{page_id % 60}?sid={session_id}", status_code=302)
+            response = RedirectResponse(url=f"/bw/decoy/{page_id % cfg.decoy_max_nodes}?sid={session_id}", status_code=302)
             _attach_cookie(response, cfg, session_id)
             return response
         if decision == "challenge":

@@ -1,0 +1,129 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# botwall.toml  —  Botwall configuration file
+#
+# Load order (highest priority first):
+#   1. BOTWALL_CONFIG env var (path to a custom .toml file)
+#   2. botwall.toml in the working directory  (this file)
+#   3. ~/.config/botwall/botwall.toml
+#   4. Built-in defaults (shown below as comments)
+#
+# Environment variables override ANY value here:
+#   BOTWALL_SECRET_KEY, BOTWALL_PORT, BOTWALL_HOST, etc.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[server]
+# The address and port the Botwall API listens on.
+host = "127.0.0.1"
+port = 4000
+
+# Name of the session cookie placed in the browser.
+session_cookie = "bw_sid"
+
+# Gate token cookie (placed after Stage 1 PoW is solved).
+gate_cookie = "bw_gate"
+
+[secrets]
+# CHANGE THESE IN PRODUCTION — never commit real keys here.
+# Prefer setting BOTWALL_SECRET_KEY and BOTWALL_TELEMETRY_SECRET
+# as environment variables or via a secrets manager.
+secret_key         = "dev-change-me"
+telemetry_secret   = "telemetry-dev-secret"
+
+[redis]
+# Set enabled = true to use Redis for persistent session storage.
+# Falls back to in-memory store if Redis is unreachable.
+enabled = false
+url     = "redis://127.0.0.1:6379/0"
+
+[scoring]
+# Thresholds that control routing decisions.
+# allow_threshold: minimum (score + seq_quality) to hand out an allow decision.
+allow_threshold     = 30.0
+# decoy_threshold: score at or below this → hard redirect to decoy.
+decoy_threshold     = -80.0
+# observe_threshold: score below this (but above decoy) → observe, not allow.
+observe_threshold   = -35.0
+# Sliding window of beacon events used for sequence quality.
+sequence_window     = 16
+
+[scoring.weights]
+# Request-level signal deltas (negative = penalty, positive = bonus).
+ua_bot_marker       = -45
+ua_browser          = 4
+missing_accept_lang = -10
+ip_bad              = -25
+ip_good             = 6
+missing_ja3         = -5
+session_continuity  = 3
+burst_extreme       = -35   # ≥10 req / 10s
+burst_high          = -15   # ≥6 req / 10s
+
+# Traversal token deltas.
+traversal_valid     = 10
+traversal_invalid   = -10
+
+# Beacon signal deltas.
+trap_hit_per_event  = -25   # multiplied by trap_hits, capped at -50
+scroll_dwell_human  = 12
+low_dwell           = -8
+entropy_ok          = 8
+entropy_outlier     = -6
+focus_visibility    = 4
+screenshot_combo    = -5
+render_flat         = -10
+render_variance     = 6
+ua_mismatch_tls_js  = -25
+platform_mismatch   = -15
+ua_data_empty       = -10
+
+# Sequence quality deltas.
+seq_dwell_good      = 8
+seq_scroll_good     = 7
+seq_entropy_good    = 6
+seq_trap_penalty    = -20
+seq_backtrack_bonus = 5
+seq_linearity_penalty = -12
+
+[tokens]
+# Proof token (per-page, Stage 2 Phase 2.3).
+proof_ttl_seconds       = 60
+
+# Traversal token (internal link chain, Stage 2 Phase 2.4).
+traversal_ttl_seconds   = 300
+
+# Recovery token (false-positive exit, Stage 2).
+recovery_ttl_seconds    = 180
+
+# Temporary allow window granted after successful recovery.
+recovery_allow_seconds  = 300
+
+# Stage 1 gate token lifetime.
+gate_ttl_seconds        = 86400   # 24 hours
+
+[pow]
+# Proof-of-Work settings for Stage 1 entry gate.
+# difficulty: number of leading zero hex chars required in SHA-256 hash.
+default_difficulty    = 5
+elevated_difficulty   = 7    # applied to known-bad IPs / repeated failures
+max_solve_seconds     = 30   # auto-fail if browser takes longer than this
+
+[decoy]
+# Layer 2 synthetic content graph settings.
+max_nodes     = 80
+min_links     = 4
+max_links     = 6
+
+[telemetry]
+# Opt-in cross-server behavioral fingerprint sharing.
+enabled = false
+
+# Network anomaly scoring thresholds (number of distinct peer sources
+# that must have seen a fingerprint to apply each penalty).
+peer_threshold_mild     = 3    # → -15 penalty
+peer_threshold_strong   = 5    # → -30 penalty
+peer_threshold_hard     = 10   # → -50 penalty
+
+# JSON map of peer source names to their shared secrets.
+# Example: '{"peer-a": "secret-a", "peer-b": "secret-b"}'
+# Prefer setting this via BOTWALL_PEER_SECRETS env var.
+peer_secrets = ""
