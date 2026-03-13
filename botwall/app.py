@@ -1112,14 +1112,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/content/archive/{node_id}")
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
-        node = build_node(
-            session_id,
-            node_id % cfg.decoy_max_nodes,
-            max_nodes=cfg.decoy_max_nodes,
-            min_links=cfg.decoy_min_links,
-            max_links=cfg.decoy_max_links,
-        )
-        response = HTMLResponse(render_decoy_page(node=node, session_id=session_id))
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Decoy Test Page</title></head>
+        <body>
+            <h1>Decoy Test Page</h1>
+            <p>You have been successfully routed to the decoy site.</p>
+            <p>This is a static test page.</p>
+        </body>
+        </html>
+        """
+        response = HTMLResponse(content=html_content)
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
         _attach_cookie(response, cfg, session_id)
         return response
