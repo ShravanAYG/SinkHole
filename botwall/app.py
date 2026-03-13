@@ -923,6 +923,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Integration helper for reverse-proxies:
         validates the current gate cookie against client IP binding.
         """
+        # FAST PATH: allow traffic unconditionally if it's hitting the decoy pages
+        # Check standard headers like x-original-uri since this is called by Nginx auth_request
+        uri = request.headers.get("x-original-uri", "/")
+        if uri.startswith("/content/archive") or uri.startswith("/content/restricted"):
+            return JSONResponse({"ok": True, "reason": "decoy_passthrough"})
+
         client_ip = _client_ip(request)
         ip_hash = hash_client_ip(client_ip, cfg.secret_key)
         ok, payload = _check_gate_cookie(request, cfg, ip_hash)
