@@ -483,15 +483,100 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ── Stage 1: Entry Gate ────────────────────────────────────────────────────
 
     @app.get("/bw/gate/challenge")
-    async def bw_gate_challenge(request: Request, path: str = "/") -> HTMLResponse:
+    async def bw_gate_challenge(request: Request, path: str = "/") -> Response:
         """
         Serve the behavioral CAPTCHA challenge page (replaces PoW).
-        Interactive mouse/typing analysis to distinguish humans from bots.
+        First analyzes request headers to detect bots/scrapers and redirects them to decoy.
         """
         session_id = _get_session_id(request, cfg)
         client_ip = _client_ip(request)
         ip_hash = hash_client_ip(client_ip, cfg.secret_key)
         
+        # ── BOT/SCRAPER DETECTION ON GET ─────────────────────────────────────────
+        ua = request.headers.get("user-agent", "")
+        ua_lower = ua.lower()
+        
+        # Classification patterns
+        crawler_patterns = [
+            "bot", "crawler", "spider", "scraper", "archive", "wget", "curl", "httpclient",
+            "python-requests", "scrapy", "httpx", "axios", "node-fetch", "guzzlehttp",
+            "java/", "go-http", "ruby/", "libwww", "mechanize", "phantomjs", "slimerjs",
+        ]
+        headless_patterns = [
+            "headlesschrome", "headless firefox", "headless", "electron", "puppeteer",
+            "playwright", "selenium", "webdriver", "chromedriver", "geckodriver",
+            "cdp_", "chrome-launcher", "__playwright", "__puppeteer",
+        ]
+        scraper_patterns = [
+            "firecrawl", "crawl4ai", "gptbot", "chatgpt-user", "claude-web", "anthropic-ai",
+            "perplexitybot", "bytespider", "diffbot", "facebookexternalhit", "linkedinbot",
+            "twitterbot", "slackbot", "discordbot", "telegrambot", "whatsapp",
+        ]
+        
+        # Check for bot indicators
+        is_crawler = any(p in ua_lower for p in crawler_patterns)
+        is_headless = any(p in ua_lower for p in headless_patterns)
+        is_scraper = any(p in ua_lower for p in scraper_patterns)
+        
+        # Check headers for automation markers
+        via_header = request.headers.get("via", "").lower()
+        has_firecrawl_via = "firecrawl" in via_header
+        x_requested_with = request.headers.get("x-requested-with", "").lower()
+        accept_header = request.headers.get("accept", "")
+        
+        # Classification result
+        client_type = "user"
+        detection_reasons = []
+        
+        if is_scraper or has_firecrawl_via:
+            client_type = "scraper"
+            detection_reasons.append("scraper_ua" if is_scraper else "firecrawl_via")
+        elif is_headless:
+            client_type = "headless_browser"
+            detection_reasons.append("headless_ua")
+        elif is_crawler:
+            client_type = "crawler"
+            detection_reasons.append("crawler_ua")
+        elif "xmlhttprequest" in x_requested_with:
+            client_type = "bot"
+            detection_reasons.append("xhr_header")
+        
+        # Check for suspicious accept headers (bots often don't accept JS/CSS properly)
+        if accept_header and "text/html" not in accept_header and "*/*" not in accept_header:
+            if client_type == "user":
+                client_type = "suspicious"
+            detection_reasons.append("weird_accept")
+        
+        # Log classification
+        import logging
+        logger = logging.getLogger("sinkhole.gate")
+        logger.warning(
+            f"GATE_CHECK ip={client_ip} type={client_type} ua={ua[:80]!r} "
+            f"reasons={detection_reasons} via={via_header[:30]!r}"
+        )
+        
+        # ── REDIRECT BOTS TO DECOY IMMEDIATELY ──────────────────────────────────
+        if client_type in ("scraper", "headless_browser", "crawler", "bot"):
+            session = store.store.load_session(session_id, ip_hash)
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).extend([f"gate:{r}" for r in detection_reasons])
+            session["client_classification"] = client_type
+            session["detected_ua"] = ua[:200]
+            _record_decision(session, "decoy", detection_reasons)
+            store.store.save_session(session)
+            
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            logger.warning(
+                f"GATE_BLOCK ip={client_ip} type={client_type} "
+                f"redirect=/bw/decoy/{node_id} reasons={detection_reasons}"
+            )
+            return RedirectResponse(
+                url=f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type={client_type}",
+                status_code=302
+            )
+        
+        # ── SERVE CHALLENGE TO REAL USERS ────────────────────────────────────────
         # Issue a simple challenge token for replay protection
         from .crypto import sign_json
         challenge_token = sign_json(
