@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import statistics
 import time
 from dataclasses import dataclass
@@ -10,6 +11,36 @@ from .models import BeaconEvent
 
 # Default weights used when no config is passed (matches botwall.toml defaults).
 _DEFAULT_WEIGHTS = ScoringWeights()
+
+# ── Heuristic UA detection (catches unknown/future scrapers) ───────────────
+
+# Matches domains/URLs embedded in the UA string — a hallmark of crawlers.
+_RE_URL_IN_UA = re.compile(r"https?://|[a-z0-9-]+\.[a-z]{2,}/")
+
+# Matches version strings like "Firefox/120" or "Chrome/131.0" — present in
+# all real browsers.
+_RE_BROWSER_VERSION = re.compile(r"(?:firefox|chrome|safari|edge|opera|opr)/[\d.]+", re.I)
+
+
+def _is_suspicious_ua(ua: str) -> tuple[bool, str]:
+    """
+    Structural heuristics that flag unknown scrapers without needing their
+    name in a list.  Returns (is_suspicious, reason_tag).
+
+    These catch *patterns* common to all scrapers, not specific names:
+    1. Empty or extremely short UAs → no real browser sends these.
+    2. URL/domain in the UA → crawlers identify themselves with a homepage.
+    3. Non-Mozilla UA without any browser version string → custom HTTP client.
+    """
+    if not ua:
+        return True, "request:empty_user_agent"
+    if len(ua) < 20:
+        return True, "request:suspiciously_short_ua"
+    if _RE_URL_IN_UA.search(ua):
+        return True, "request:url_in_user_agent"
+    if "mozilla" not in ua and not _RE_BROWSER_VERSION.search(ua):
+        return True, "request:non_browser_ua_pattern"
+    return False, ""
 
 
 @dataclass(slots=True)
@@ -44,13 +75,24 @@ def score_request(
     reasons: list[str] = []
     delta = 0.0
 
-    bot_markers = ["headless", "puppeteer", "playwright", "selenium", "phantomjs", "curl", "wget"]
+    bot_markers = [
+        "headless", "puppeteer", "playwright", "selenium", "phantomjs",
+        "curl", "wget", "scrapy", "firecrawl", "crawl", "spider",
+        "bot/", "/scan ", "nutch", "colly", "httpclient", "go-http",
+        "python-requests", "python-urllib", "aiohttp", "httpx",
+    ]
     if any(marker in ua for marker in bot_markers):
         delta += weights.ua_bot_marker
         reasons.append("request:automation_ua_marker")
-    elif "mozilla" in ua:
-        delta += weights.ua_browser
-        reasons.append("request:browser_like_ua")
+    else:
+        # Structural heuristic: catch unknown/future scrapers by UA shape
+        suspicious, suspicious_reason = _is_suspicious_ua(ua)
+        if suspicious:
+            delta += weights.ua_bot_marker
+            reasons.append(suspicious_reason)
+        elif "mozilla" in ua:
+            delta += weights.ua_browser
+            reasons.append("request:browser_like_ua")
 
     if not accept_lang:
         delta += weights.missing_accept_lang

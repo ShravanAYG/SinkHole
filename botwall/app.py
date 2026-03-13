@@ -418,6 +418,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def bw_check(request: Request) -> JSONResponse:
         fallback = request.query_params.get("path", "/")
         target_path = _canonical_target_path(request, fallback)
+
+        # Enforce Stage 1 gate cookie on the auth_request endpoint
+        client_ip = _client_ip(request)
+        ip_hash_pre = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash_pre)
+        if not gate_ok:
+            response = JSONResponse(
+                {"session_id": "", "decision": "gate", "score": 0.0, "reasons": ["gate:missing_or_invalid"]},
+                status_code=401,
+            )
+            response.headers["x-botwall-decision"] = "gate"
+            return response
+
         require_traversal = target_path.startswith("/content/")
         session, session_id, reasons, decision, _ = _evaluate_request(
             request=request,
