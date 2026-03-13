@@ -14,14 +14,20 @@ from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
 from .html import (
+    render_about_page,
     render_behavioral_challenge_page,
+    render_blog_page,
+    render_blog_post_page,
     render_challenge_page,
+    render_contact_page,
     render_dashboard,
     render_decoy_page,
     render_gate_blocked_page,
     render_gate_challenge_page,
     render_origin_page,
+    render_products_page,
     render_recovery_page,
+    render_search_page,
     render_telemetry_page,
     render_bot_caught_page,
     render_test_suite_page,
@@ -1253,6 +1259,241 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
         _attach_cookie(response, cfg, session_id)
         return response
+
+    # ── Regular Website Pages ──────────────────────────────────────────────────
+
+    @app.get("/about")
+    async def about_page(request: Request) -> Response:
+        """About page with company information."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/about", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/about", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_about_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/contact")
+    async def contact_page(request: Request) -> Response:
+        """Contact page with form including honeypot protection."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/contact", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/contact", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_contact_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/products")
+    async def products_page(request: Request) -> Response:
+        """Products and pricing page."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/products", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/products", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_products_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/blog")
+    async def blog_page(request: Request) -> Response:
+        """Blog listing page with all articles."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/blog", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/blog", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_blog_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/blog/{post_id}")
+    async def blog_post_page(request: Request, post_id: int) -> Response:
+        """Individual blog post page."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            encoded = urllib.parse.quote(f"/blog/{post_id}", safe="/")
+            return RedirectResponse(url=f"/bw/gate/challenge?path={encoded}", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path=f"/blog/{post_id}", require_traversal=True,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_blog_post_page(session_id=session_id, post_id=post_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/search")
+    async def search_page(request: Request, q: str = "") -> Response:
+        """Search page with results."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/search", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/search", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        # Simple search results
+        results = []
+        if q:
+            # Mock search results based on query
+            all_content = [
+                {"title": "Understanding Behavioral Bot Detection", "url": "/blog/1", "description": "How mouse movements and keystroke dynamics reveal bots."},
+                {"title": "The Rise of AI Scrapers", "url": "/blog/2", "description": "Detecting LLM-powered crawling systems."},
+                {"title": "Decoy Networks", "url": "/blog/3", "description": "Fighting bots with fake data."},
+                {"title": "Proof-of-Work for Humans", "url": "/blog/4", "description": "Making bot computation expensive."},
+                {"title": "Professional Plan", "url": "/products", "description": "Advanced behavioral analysis and API access."},
+                {"title": "Enterprise Plan", "url": "/products", "description": "Maximum protection with custom ML models."},
+                {"title": "About SinkHole", "url": "/about", "description": "Next-generation bot detection platform."},
+                {"title": "Contact Us", "url": "/contact", "description": "Get in touch with our team."},
+            ]
+            q_lower = q.lower()
+            results = [r for r in all_content if q_lower in r["title"].lower() or q_lower in r["description"].lower()]
+
+        page = render_search_page(session_id=session_id, query=q, results=results)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    # ── API Endpoints ──────────────────────────────────────────────────────────
+
+    @app.post("/api/contact")
+    async def api_contact(request: Request) -> JSONResponse:
+        """Contact form submission with honeypot bot detection."""
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+
+        # Honeypot detection - if 'website' field is filled, it's a bot
+        honeypot = data.get("website", "").strip()
+        if honeypot:
+            session_id = _get_session_id(request, cfg)
+            client_ip = _client_ip(request)
+            ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+            session = store.store.load_session(session_id, ip_hash)
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 20.0)
+            session.setdefault("reasons", []).append("honeypot:contact_form")
+            _record_decision(session, "decoy", ["honeypot:contact_form"])
+            store.store.save_session(session)
+            return JSONResponse({"ok": False, "error": "Bot detected"}, status_code=403)
+
+        # Normal form processing
+        name = data.get("name", "").strip()
+        email = data.get("email", "").strip()
+        message = data.get("message", "").strip()
+
+        if not name or not email or not message:
+            return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
+
+        # In a real app, send email or save to database
+        # For demo, just return success
+        return JSONResponse({"ok": True, "message": "Message received (demo mode)"})
+
+    @app.get("/api/products")
+    async def api_products() -> JSONResponse:
+        """Get products list as JSON API."""
+        products = [
+            {"id": "starter", "name": "Starter", "price": "$29/mo", "description": "Perfect for small websites", "features": ["1,000 verified sessions", "Basic bot detection", "Email support"]},
+            {"id": "professional", "name": "Professional", "price": "$99/mo", "description": "For growing businesses", "features": ["10,000 verified sessions", "Advanced behavioral analysis", "Priority support", "API access"]},
+            {"id": "enterprise", "name": "Enterprise", "price": "$499/mo", "description": "Maximum protection", "features": ["Unlimited sessions", "Custom ML models", "24/7 phone support", "SLA guarantee", "On-premise option"]},
+        ]
+        return JSONResponse({"ok": True, "products": products})
+
+    @app.get("/api/search")
+    async def api_search(q: str = "") -> JSONResponse:
+        """Search API returning JSON results."""
+        if not q:
+            return JSONResponse({"ok": True, "query": "", "results": []})
+
+        all_content = [
+            {"title": "Understanding Behavioral Bot Detection", "url": "/blog/1", "type": "blog", "snippet": "How mouse movements and keystroke dynamics reveal bots."},
+            {"title": "The Rise of AI Scrapers", "url": "/blog/2", "type": "blog", "snippet": "Detecting LLM-powered crawling systems."},
+            {"title": "Decoy Networks", "url": "/blog/3", "type": "blog", "snippet": "Fighting bots with fake data."},
+            {"title": "Proof-of-Work for Humans", "url": "/blog/4", "type": "blog", "snippet": "Making bot computation expensive."},
+            {"title": "Telemetry and Threat Intelligence", "url": "/blog/5", "type": "blog", "snippet": "How we track bot fingerprints."},
+            {"title": "Professional Plan", "url": "/products", "type": "product", "snippet": "Advanced behavioral analysis and API access."},
+            {"title": "Enterprise Plan", "url": "/products", "type": "product", "snippet": "Maximum protection with custom ML models."},
+        ]
+        q_lower = q.lower()
+        results = [r for r in all_content if q_lower in r["title"].lower() or q_lower in r["snippet"].lower()]
+        return JSONResponse({"ok": True, "query": q, "count": len(results), "results": results})
 
     # ── Test Suite & Development Routes ────────────────────────────────────────
 

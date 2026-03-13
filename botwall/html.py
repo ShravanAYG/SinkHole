@@ -1691,7 +1691,8 @@ def render_bot_caught_page(*, session_id: str, user_agent: str = "", reasons: li
 </html>"""
 
 
-def render_origin_page(*, session_id: str, page_id: int, links: list[tuple[str, str]]) -> str:
+def render_origin_page(*, session_id: str, page_id: int, links: list[tuple[str, str]], nav_links: list[tuple[str, str]] | None = None) -> str:
+    nav_items = "".join(f'<a href="{html.escape(url)}" class="nav-link">{html.escape(label)}</a>' for url, label in (nav_links or []))
     items = "".join(f'<li><a href="{html.escape(url)}">{html.escape(label)}</a></li>' for url, label in links)
     return f"""<!doctype html>
 <html data-bw-sid="{html.escape(session_id)}">
@@ -1700,13 +1701,601 @@ def render_origin_page(*, session_id: str, page_id: int, links: list[tuple[str, 
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Protected Content {page_id}</title>
   <script src="/bw/sdk.js" defer></script>
-  <style>body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; max-width: 760px; line-height: 1.5; }}</style>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; --accent-2: #1aa179; }}
+    body {{ font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem; }}
+    .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }}
+    h1 {{ font-size: 1.75rem; margin-bottom: 1rem; }}
+    p {{ margin-bottom: 1rem; }}
+    ul {{ padding-left: 1.5rem; }}
+    li {{ margin-bottom: 0.5rem; }}
+  </style>
 </head>
 <body>
-  <h1>Protected Content Page {page_id}</h1>
-  <p>This is real content shown to sessions that are not in decoy mode.</p>
-  <p>Behavioral scoring runs in the background with low UX impact.</p>
-  <ul>{items}</ul>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 Home</a>
+    {nav_items}
+  </nav>
+  <div class="container">
+    <div class="card">
+      <h1>Protected Content Page {page_id}</h1>
+      <p>This is real content shown to sessions that are not in decoy mode.</p>
+      <p>Behavioral scoring runs in the background with low UX impact.</p>
+      <ul>{items}</ul>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+def render_about_page(*, session_id: str) -> str:
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About Us - SinkHole Demo</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 800px; margin: 2rem auto; padding: 0 1rem; }}
+    .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; }}
+    h1 {{ font-size: 2rem; margin-bottom: 1rem; color: var(--accent); }}
+    h2 {{ font-size: 1.25rem; margin-top: 1.5rem; margin-bottom: 0.75rem; }}
+    p {{ margin-bottom: 1rem; }}
+    .feature-list {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-top: 1.5rem; }}
+    .feature {{ padding: 1rem; background: #f1f3f5; border-radius: 8px; }}
+    .feature h3 {{ margin: 0 0 0.5rem; font-size: 1rem; color: var(--accent); }}
+    .feature p {{ margin: 0; font-size: 0.9rem; color: var(--muted); }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 Home</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/search" class="nav-link">Search</a>
+  </nav>
+  <div class="container">
+    <div class="card">
+      <h1>About SinkHole</h1>
+      <p>SinkHole is a next-generation bot detection and traffic verification platform. We combine behavioral analysis, proof-of-work challenges, and machine learning to distinguish between humans and automated systems.</p>
+      
+      <h2>Our Mission</h2>
+      <p>We believe the web should be safe for legitimate users while remaining hostile to scrapers, bots, and malicious automation. Our technology protects content without compromising user experience.</p>
+      
+      <h2>Key Features</h2>
+      <div class="feature-list">
+        <div class="feature">
+          <h3>🔍 Behavioral Analysis</h3>
+          <p>Mouse movements, keystroke dynamics, and scroll patterns reveal bot behavior.</p>
+        </div>
+        <div class="feature">
+          <h3>🛡️ PoW Challenges</h3>
+          <p>Lightweight browser-side proof-of-work that doesn't impact real users.</p>
+        </div>
+        <div class="feature">
+          <h3>🎭 Decoy System</h3>
+          <p>Bots are silently redirected to poisoned data hellholes.</p>
+        </div>
+        <div class="feature">
+          <h3>📊 Real-time Telemetry</h3>
+          <p>Live monitoring of traffic quality and threat detection.</p>
+        </div>
+      </div>
+      
+      <h2>Technology Stack</h2>
+      <p>Built with Python, FastAPI, and modern web technologies. Our system processes millions of requests daily with sub-millisecond latency overhead.</p>
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+def render_contact_page(*, session_id: str) -> str:
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Contact Us - SinkHole Demo</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; --accent-2: #1aa179; --err: #dc3545; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 600px; margin: 2rem auto; padding: 0 1rem; }}
+    .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; }}
+    h1 {{ font-size: 1.75rem; margin-bottom: 1rem; color: var(--accent); }}
+    .form-group {{ margin-bottom: 1.25rem; }}
+    label {{ display: block; margin-bottom: 0.5rem; font-weight: 500; }}
+    input, textarea {{ width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; font-family: inherit; box-sizing: border-box; }}
+    input:focus, textarea:focus {{ outline: none; border-color: var(--accent); }}
+    .honeypot {{ position: absolute; left: -9999px; opacity: 0; }} /* Honeypot field */
+    button {{ background: var(--accent); color: white; border: none; padding: 0.875rem 2rem; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }}
+    button:hover {{ background: #0952a8; }}
+    .info-box {{ background: #e7f3ff; border-left: 4px solid var(--accent); padding: 1rem; margin-bottom: 1.5rem; border-radius: 0 8px 8px 0; }}
+    .info-box p {{ margin: 0; font-size: 0.9rem; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 Home</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/search" class="nav-link">Search</a>
+  </nav>
+  <div class="container">
+    <div class="card">
+      <h1>Contact Us</h1>
+      <div class="info-box">
+        <p>📧 This form includes honeypot protection. Bots that fill hidden fields will be flagged.</p>
+      </div>
+      <form id="contactForm" method="POST" action="/api/contact">
+        <!-- Honeypot field - should remain empty -->
+        <div class="honeypot">
+          <input type="text" name="website" id="website" tabindex="-1" autocomplete="off" />
+        </div>
+        <div class="form-group">
+          <label for="name">Name *</label>
+          <input type="text" id="name" name="name" required autocomplete="name" />
+        </div>
+        <div class="form-group">
+          <label for="email">Email *</label>
+          <input type="email" id="email" name="email" required autocomplete="email" />
+        </div>
+        <div class="form-group">
+          <label for="subject">Subject</label>
+          <input type="text" id="subject" name="subject" />
+        </div>
+        <div class="form-group">
+          <label for="message">Message *</label>
+          <textarea id="message" name="message" rows="5" required></textarea>
+        </div>
+        <button type="submit">Send Message</button>
+      </form>
+    </div>
+  </div>
+  <script>
+    document.getElementById('contactForm').addEventListener('submit', async (e) => {{
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const data = Object.fromEntries(formData);
+      
+      try {{
+        const resp = await fetch('/api/contact', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(data)
+        }});
+        const result = await resp.json();
+        if (result.ok) {{
+          alert('Message sent! (Demo only - no actual message was sent)');
+          e.target.reset();
+        }} else {{
+          alert('Error: ' + (result.error || 'Failed to send'));
+        }}
+      }} catch (err) {{
+        alert('Network error. Please try again.');
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+
+
+def render_products_page(*, session_id: str) -> str:
+    products = [
+        ("Starter", "$29/mo", "Perfect for small websites", ["1,000 verified sessions", "Basic bot detection", "Email support"]),
+        ("Professional", "$99/mo", "For growing businesses", ["10,000 verified sessions", "Advanced behavioral analysis", "Priority support", "API access"]),
+        ("Enterprise", "$499/mo", "Maximum protection", ["Unlimited sessions", "Custom ML models", "24/7 phone support", "SLA guarantee", "On-premise option"]),
+    ]
+    
+    product_cards = ""
+    for name, price, desc, features in products:
+        features_html = "".join(f'<li>{html.escape(f)}</li>' for f in features)
+        featured = "border: 2px solid var(--accent);" if name == "Professional" else ""
+        badge = '<span style="background: var(--accent); color: white; padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600;">MOST POPULAR</span>' if name == "Professional" else ""
+        product_cards += f'''
+        <div class="product-card" style="{featured}">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <h3>{html.escape(name)}</h3>
+            {badge}
+          </div>
+          <div class="price">{html.escape(price)}</div>
+          <p class="desc">{html.escape(desc)}</p>
+          <ul class="features">{features_html}</ul>
+          <button class="cta">Get Started</button>
+        </div>
+        '''
+    
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Products & Pricing - SinkHole Demo</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; --accent-2: #1aa179; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }}
+    h1 {{ text-align: center; font-size: 2rem; margin-bottom: 0.5rem; }}
+    .subtitle {{ text-align: center; color: var(--muted); margin-bottom: 2rem; }}
+    .products {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }}
+    .product-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; }}
+    .product-card h3 {{ margin: 0; font-size: 1.25rem; color: var(--accent); }}
+    .price {{ font-size: 2rem; font-weight: 700; color: var(--text); margin: 1rem 0; }}
+    .desc {{ color: var(--muted); margin-bottom: 1rem; }}
+    .features {{ list-style: none; padding: 0; margin: 1rem 0; }}
+    .features li {{ padding: 0.375rem 0; padding-left: 1.5rem; position: relative; }}
+    .features li::before {{ content: "✓"; position: absolute; left: 0; color: var(--accent-2); font-weight: 700; }}
+    .cta {{ width: 100%; padding: 0.875rem; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 1rem; }}
+    .cta:hover {{ background: #0952a8; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 Home</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/search" class="nav-link">Search</a>
+  </nav>
+  <div class="container">
+    <h1>Choose Your Plan</h1>
+    <p class="subtitle">Protect your website from bots with our comprehensive solutions</p>
+    <div class="products">
+      {product_cards}
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+def render_blog_page(*, session_id: str, posts: list[dict[str, Any]] | None = None) -> str:
+    default_posts = [
+        {"id": 1, "title": "Understanding Behavioral Bot Detection", "excerpt": "How mouse movements and keystroke dynamics can reveal automated traffic.", "date": "2024-03-15", "tags": ["security", "behavioral-analysis"]},
+        {"id": 2, "title": "The Rise of AI Scrapers", "excerpt": "New challenges in detecting LLM-powered crawling systems like Firecrawl and Crawl4AI.", "date": "2024-03-10", "tags": ["ai", "scraping"]},
+        {"id": 3, "title": "Decoy Networks: Fighting Fire with Fire", "excerpt": "Why feeding bots fake data is the ultimate defense mechanism.", "date": "2024-03-05", "tags": ["decoy", "strategy"]},
+        {"id": 4, "title": "Proof-of-Work for Humans", "excerpt": "Making bot computation expensive while keeping it seamless for real users.", "date": "2024-02-28", "tags": ["pow", "ux"]},
+        {"id": 5, "title": "Telemetry and Threat Intelligence", "excerpt": "How we track and share bot fingerprints across the network.", "date": "2024-02-20", "tags": ["telemetry", "intelligence"]},
+    ]
+    posts = posts or default_posts
+    
+    posts_html = ""
+    for post in posts:
+        tags_html = "".join(f'<span class="tag">{html.escape(t)}</span>' for t in post.get("tags", []))
+        posts_html += f'''
+        <article class="post-card">
+          <h2><a href="/blog/{post['id']}">{html.escape(post['title'])}</a></h2>
+          <div class="meta">
+            <span class="date">{html.escape(post['date'])}</span>
+            <div class="tags">{tags_html}</div>
+          </div>
+          <p class="excerpt">{html.escape(post['excerpt'])}</p>
+          <a href="/blog/{post['id']}" class="read-more">Read more →</a>
+        </article>
+        '''
+    
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Blog - SinkHole Demo</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 800px; margin: 2rem auto; padding: 0 1rem; }}
+    h1 {{ font-size: 1.75rem; margin-bottom: 1.5rem; }}
+    .post-card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }}
+    .post-card h2 {{ margin: 0 0 0.5rem; font-size: 1.25rem; }}
+    .post-card h2 a {{ color: var(--text); text-decoration: none; }}
+    .post-card h2 a:hover {{ color: var(--accent); }}
+    .meta {{ display: flex; gap: 1rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }}
+    .date {{ color: var(--muted); font-size: 0.875rem; }}
+    .tags {{ display: flex; gap: 0.5rem; }}
+    .tag {{ background: #e7f3ff; color: var(--accent); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }}
+    .excerpt {{ color: var(--muted); margin: 0; }}
+    .read-more {{ display: inline-block; margin-top: 0.75rem; color: var(--accent); text-decoration: none; font-weight: 500; }}
+    .read-more:hover {{ text-decoration: underline; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 Home</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/search" class="nav-link">Search</a>
+  </nav>
+  <div class="container">
+    <h1>Latest Posts</h1>
+    {posts_html}
+  </div>
+</body>
+</html>"""
+
+
+def render_blog_post_page(*, session_id: str, post_id: int) -> str:
+    posts_content = {
+        1: {
+            "title": "Understanding Behavioral Bot Detection",
+            "date": "2024-03-15",
+            "content": """
+            <p>Traditional bot detection relies on IP reputation and CAPTCHA challenges. But modern bots have evolved - they use residential proxies, headless browsers, and even AI to solve puzzles.</p>
+            <h3>The Behavioral Approach</h3>
+            <p>Behavioral detection looks at <em>how</em> users interact with your site, not just <em>what</em> they access. Every human has unique patterns:</p>
+            <ul>
+                <li>Mouse movements follow curved paths with variable velocity</li>
+                <li>Keystrokes have inconsistent timing (80-200ms between presses)</li>
+                <li>Scroll behavior shows momentum and deceleration</li>
+                <li>Tab switching and focus changes follow organic patterns</li>
+            </ul>
+            <h3>Bot Signatures</h3>
+            <p>Bots, even sophisticated ones, betray themselves through:</p>
+            <ul>
+                <li>Perfectly straight mouse paths (teleportation between points)</li>
+                <li>Consistent keystroke timing (robots are too regular)</li>
+                <li>Instant scroll jumps without momentum</li>
+                <li>Missing or synthetic peripheral signals</li>
+            </ul>
+            <p>By analyzing hundreds of these micro-signals, we can detect automation with 99.9% accuracy while maintaining a frictionless experience for legitimate users.</p>
+            """,
+            "tags": ["security", "behavioral-analysis"]
+        },
+        2: {
+            "title": "The Rise of AI Scrapers",
+            "date": "2024-03-10", 
+            "content": """
+            <p>LLM-powered scrapers represent a new threat category. Tools like Firecrawl, Crawl4AI, and GPT-based agents can navigate sites, extract structured data, and even fill forms intelligently.</p>
+            <h3>Why Traditional Defenses Fail</h3>
+            <p>Classic WAF rules look for:</p>
+            <ul>
+                <li>Known User-Agent strings</li>
+                <li>Rapid request rates</li>
+                <li>Missing browser features</li>
+            </ul>
+            <p>AI scrapers run in real browsers, respect rate limits, and mimic human UAs perfectly.</p>
+            <h3>The Solution: Behavioral Fingerprints</h3>
+            <p>Even AI-controlled browsers can't perfectly replicate human behavior. Our detection looks for:</p>
+            <ul>
+                <li>Reading speed that's too fast (processing entire pages in milliseconds)</li>
+                <li>Interaction patterns that don't match visual attention</li>
+                <li>Absence of micro-pauses and hesitations</li>
+            </ul>
+            """,
+            "tags": ["ai", "scraping"]
+        },
+        3: {
+            "title": "Decoy Networks: Fighting Fire with Fire",
+            "date": "2024-03-05",
+            "content": """
+            <p>When we detect a bot with high confidence, we don't block it. Instead, we redirect it to a decoy hellhole - a parallel website filled with convincing but completely fake data.</p>
+            <h3>Why Decoys Work</h3>
+            <p>Bots don't know they're detected. They continue operating normally, scraping what they believe is real content. Meanwhile:</p>
+            <ul>
+                <li>Their datasets become poisoned with garbage</li>
+                <li>Training models on fake data degrades their performance</li>
+                <li>Competitors using scraped data make bad decisions</li>
+                <li>We gather intelligence on their techniques</li>
+            </ul>
+            <h3>Decoy Architecture</h3>
+            <p>Our decoy system generates unique content per session:</p>
+            <ul>
+                <li>Fake product prices that are slightly wrong</li>
+                <li>Synthetic reviews with telltale markers</li>
+                <li>Altered article text that preserves grammar but changes meaning</li>
+                <li>Non-existent user profiles</li>
+            </ul>
+            """,
+            "tags": ["decoy", "strategy"]
+        },
+        4: {
+            "title": "Proof-of-Work for Humans",
+            "date": "2024-02-28",
+            "content": """
+            <p>Proof-of-Work (PoW) is typically associated with cryptocurrency mining. We've adapted it for bot detection - lightweight challenges that prove browser authenticity without annoying users.</p>
+            <h3>How It Works</h3>
+            <p>When a visitor arrives, their browser receives a cryptographic challenge. It must find a nonce that, when hashed with the challenge, produces a result with specific leading zeros.</p>
+            <p>A modern browser solves this in 1-3 seconds. Bot farms face a dilemma:</p>
+            <ul>
+                <li>Solving costs compute power and reduces throughput</li>
+                <li>Skipping reveals them as non-browser clients</li>
+                <li>Using headless browsers still triggers behavioral detection</li>
+            </ul>
+            <h3>Tunable Difficulty</h3>
+            <p>We adjust difficulty based on suspicion scores. Clean browsers get easy challenges; suspicious ones work harder. Legitimate users never notice.</p>
+            """,
+            "tags": ["pow", "ux"]
+        },
+        5: {
+            "title": "Telemetry and Threat Intelligence",
+            "date": "2024-02-20",
+            "content": """
+            <p>Every detection event feeds our global threat intelligence network. When one site detects a new bot technique, all protected sites benefit immediately.</p>
+            <h3>Fingerprinting</h3>
+            <p>We capture hundreds of signals per session:</p>
+            <ul>
+                <li>Browser capabilities and inconsistencies</li>
+                <li>Canvas and WebGL rendering fingerprints</li>
+                <li>Network timing signatures</li>
+                <li>Behavioral patterns during page interaction</li>
+            </ul>
+            <h3>Peer Sharing</h3>
+            <p>Telemetry flows through authenticated feeds between trusted operators. Each fingerprint includes a suspicion score and detection context.</p>
+            <p>This creates a collective immune system - attackers can't just rotate IPs when their behavioral signature is known globally.</p>
+            """,
+            "tags": ["telemetry", "intelligence"]
+        },
+    }
+    
+    post = posts_content.get(post_id, posts_content[1])
+    tags_html = "".join(f'<span class="tag">{html.escape(t)}</span>' for t in post["tags"])
+    
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(post['title'])} - SinkHole Blog</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 720px; margin: 2rem auto; padding: 0 1rem; }}
+    .post {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; }}
+    .post-header {{ margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }}
+    h1 {{ font-size: 1.75rem; margin: 0 0 0.75rem; line-height: 1.3; }}
+    .meta {{ display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }}
+    .date {{ color: var(--muted); font-size: 0.875rem; }}
+    .tags {{ display: flex; gap: 0.5rem; }}
+    .tag {{ background: #e7f3ff; color: var(--accent); padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }}
+    .content {{ font-size: 1.0625rem; line-height: 1.7; }}
+    .content p {{ margin-bottom: 1rem; }}
+    .content h3 {{ font-size: 1.25rem; margin-top: 1.5rem; margin-bottom: 0.75rem; color: var(--accent); }}
+    .content ul {{ margin-bottom: 1rem; padding-left: 1.5rem; }}
+    .content li {{ margin-bottom: 0.375rem; }}
+    .back-link {{ display: inline-block; margin-top: 1.5rem; color: var(--accent); text-decoration: none; font-weight: 500; }}
+    .back-link:hover {{ text-decoration: underline; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 Home</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/search" class="nav-link">Search</a>
+  </nav>
+  <div class="container">
+    <article class="post">
+      <div class="post-header">
+        <h1>{html.escape(post['title'])}</h1>
+        <div class="meta">
+          <span class="date">{html.escape(post['date'])}</span>
+          <div class="tags">{tags_html}</div>
+        </div>
+      </div>
+      <div class="content">
+        {post['content']}
+      </div>
+      <a href="/blog" class="back-link">← Back to all posts</a>
+    </article>
+  </div>
+</body>
+</html>"""
+
+
+def render_search_page(*, session_id: str, query: str = "", results: list[dict[str, Any]] | None = None) -> str:
+    results = results or []
+    has_results = len(results) > 0
+    
+    if has_results:
+        results_html = ""
+        for r in results:
+            results_html += f'''
+            <div class="result">
+              <h3><a href="{html.escape(r.get('url', '#'))}">{html.escape(r.get('title', 'Untitled'))}</a></h3>
+              <p class="result-url">{html.escape(r.get('url', ''))}</p>
+              <p class="result-desc">{html.escape(r.get('description', ''))}</p>
+            </div>
+            '''
+    else:
+        if query:
+            results_html = '<p class="no-results">No results found for your search.</p>'
+        else:
+            results_html = '<p class="hint">Enter a search term above to find content.</p>'
+    
+    return f"""<!doctype html>
+<html data-bw-sid="{html.escape(session_id)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Search - SinkHole Demo</title>
+  <script src="/bw/sdk.js" defer></script>
+  <style>
+    :root {{ --bg: #f8f9fa; --surface: #fff; --border: #dee2e6; --text: #212529; --muted: #6c757d; --accent: #0b63ce; }}
+    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.6; }}
+    .navbar {{ background: var(--surface); border-bottom: 1px solid var(--border); padding: 1rem 2rem; display: flex; gap: 2rem; align-items: center; }}
+    .navbar-brand {{ font-weight: 700; color: var(--accent); text-decoration: none; font-size: 1.25rem; }}
+    .nav-link {{ color: var(--muted); text-decoration: none; font-weight: 500; }}
+    .nav-link:hover {{ color: var(--accent); }}
+    .container {{ max-width: 800px; margin: 2rem auto; padding: 0 1rem; }}
+    .search-box {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; margin-bottom: 1.5rem; }}
+    .search-form {{ display: flex; gap: 0.75rem; }}
+    .search-input {{ flex: 1; padding: 0.875rem 1rem; border: 2px solid var(--border); border-radius: 8px; font-size: 1rem; }}
+    .search-input:focus {{ outline: none; border-color: var(--accent); }}
+    .search-btn {{ padding: 0.875rem 1.5rem; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }}
+    .search-btn:hover {{ background: #0952a8; }}
+    .results {{ background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; }}
+    .result {{ padding: 1rem 0; border-bottom: 1px solid var(--border); }}
+    .result:last-child {{ border-bottom: none; }}
+    .result h3 {{ margin: 0 0 0.25rem; font-size: 1.1rem; }}
+    .result h3 a {{ color: var(--accent); text-decoration: none; }}
+    .result h3 a:hover {{ text-decoration: underline; }}
+    .result-url {{ color: #1aa179; font-size: 0.875rem; margin: 0 0 0.5rem; }}
+    .result-desc {{ color: var(--muted); margin: 0; font-size: 0.95rem; }}
+    .no-results {{ text-align: center; color: var(--muted); padding: 2rem; }}
+    .hint {{ text-align: center; color: var(--muted); padding: 1.5rem; font-style: italic; }}
+    .stats {{ text-align: center; color: var(--muted); font-size: 0.875rem; margin-bottom: 1rem; }}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">🏠 Home</a>
+    <a href="/about" class="nav-link">About</a>
+    <a href="/products" class="nav-link">Products</a>
+    <a href="/blog" class="nav-link">Blog</a>
+    <a href="/contact" class="nav-link">Contact</a>
+    <a href="/search" class="nav-link">Search</a>
+  </nav>
+  <div class="container">
+    <div class="search-box">
+      <form class="search-form" method="GET" action="/search">
+        <input type="text" name="q" class="search-input" placeholder="Search articles, products, pages..." value="{html.escape(query)}" />
+        <button type="submit" class="search-btn">Search</button>
+      </form>
+    </div>
+    <div class="results">
+      {f'<div class="stats">Found {len(results)} results for "{html.escape(query)}"</div>' if query and has_results else ''}
+      {results_html}
+    </div>
+  </div>
 </body>
 </html>"""
 
