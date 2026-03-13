@@ -101,10 +101,23 @@ def _canonical_target_path(request: Request, fallback: str) -> str:
     return fallback
 
 
-def _record_decision(session: dict[str, Any], decision: str, reasons: list[str]) -> None:
+def _record_decision(
+    session: dict[str, Any],
+    decision: str,
+    reasons: list[str],
+    request: Request | None = None,
+    settings: Settings | None = None
+) -> None:
     history = session.setdefault("decision_history", [])
     history.append({"decision": decision, "reasons": reasons, "at": now_ts()})
     session["decision_history"] = history[-30:]
+    
+    if request and settings:
+        session["client_ip"] = _client_ip(request)
+        # Store requested path (excluding our internal endpoints if possible)
+        path = request.url.path
+        if not path.startswith("/bw/"):
+            session["last_path"] = path
 
 
 def _request_meta(request: Request) -> dict[str, str]:
@@ -227,7 +240,7 @@ def _redirect_explicit_scraper_to_decoy(
         return None
     session["score"] = min(float(session.get("score", 0.0)), settings.decoy_threshold - 5.0)
     session.setdefault("reasons", []).extend(reasons)
-    _record_decision(session, "decoy", reasons)
+    _record_decision(session, "decoy", reasons, request, settings)
     session["last_user_agent"] = request.headers.get("user-agent", "")
     session["updated_at"] = now_ts()
     store.store.save_session(session)
@@ -442,7 +455,7 @@ def _evaluate_request(
         decoy_threshold=settings.decoy_threshold,
         observe_threshold=settings.observe_threshold,
     )
-    _record_decision(session, decision, reasons + req_outcome.reasons)
+    _record_decision(session, decision, reasons + req_outcome.reasons, request, settings)
     session["last_user_agent"] = request.headers.get("user-agent", "")
     session["updated_at"] = now
     store.store.save_session(session)
@@ -570,7 +583,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.setdefault("reasons", []).append(f"gate:{reason}")
             session["client_classification"] = client_type
             session["detected_ua"] = ua[:200]
-            _record_decision(session, "decoy", [reason])
+            _record_decision(session, "decoy", [reason], request, cfg)
             store.store.save_session(session)
             
             node_id = hash(session_id) % cfg.decoy_max_nodes
@@ -629,7 +642,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
             session.setdefault("reasons", []).extend(reasons)
             session["js_verification_failed"] = True
-            _record_decision(session, "decoy", reasons)
+            _record_decision(session, "decoy", reasons, request, cfg)
             store.store.save_session(session)
             node_id = hash(session_id) % cfg.decoy_max_nodes
             logger.warning(f"JS_VERIFY_BLOCK ip={client_ip} reasons={reasons}")
@@ -720,7 +733,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session["js_verification_passed"] = True
         session["js_check_details"] = details
         session["pow_solve_ms"] = solve_ms
-        _record_decision(session, "allow", ["js_verification:passed", f"pow:solved:d{pow_result.difficulty}"])
+        _record_decision(session, "allow", ["js_verification:passed", f"pow:solved:d{pow_result.difficulty}"], request, cfg)
         store.store.save_session(session)
 
         logger.warning(f"JS_VERIFY_ALLOW ip={client_ip}")
@@ -776,7 +789,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
             session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
             session.setdefault("reasons", []).extend(env_reasons)
-            _record_decision(session, "decoy", env_reasons)
+            _record_decision(session, "decoy", env_reasons, request, cfg)
             store.store.save_session(session)
             
             node_id = hash(session_id) % cfg.decoy_max_nodes
@@ -860,7 +873,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
             session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
             session.setdefault("reasons", []).extend(all_reasons)
-            _record_decision(session, "decoy", all_reasons)
+            _record_decision(session, "decoy", all_reasons, request, cfg)
             store.store.save_session(session)
             
             node_id = hash(session_id) % cfg.decoy_max_nodes
@@ -886,7 +899,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session["gate_env_score"] = int(total_score)
         session["gate_failures"] = 0
         session["behavioral_captcha_passed"] = True
-        _record_decision(session, "allow", all_reasons)
+        _record_decision(session, "allow", all_reasons, request, cfg)
         store.store.save_session(session)
         
         response = JSONResponse({
@@ -945,7 +958,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session = store.store.load_session(session_id, ip_hash)
             session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 5.0)
             session.setdefault("reasons", []).extend(pre_gate_reasons)
-            _record_decision(session, "decoy", pre_gate_reasons)
+            _record_decision(session, "decoy", pre_gate_reasons, request, cfg)
             store.store.save_session(session)
             payload = CheckResponse(
                 session_id=session_id,
@@ -1048,7 +1061,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             decoy_threshold=cfg.decoy_threshold,
             observe_threshold=cfg.observe_threshold,
         )
-        _record_decision(session, decision, reasons + beacon_outcome.reasons)
+        _record_decision(session, decision, reasons + beacon_outcome.reasons, request, cfg)
         store.store.save_session(session)
 
         result = DecisionState(

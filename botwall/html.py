@@ -2521,15 +2521,33 @@ def render_telemetry_page(data: dict[str, Any]) -> str:
         traversal_ok = int(s.get("traversal_valid", 0))
         traversal_bad = int(s.get("traversal_invalid", 0))
         history = s.get("decision_history", [])
-        latest = "-"
-        if history:
-            latest = str(history[-1].get("decision", "-"))
         cls = "ok" if latest == "allow" else "warn" if latest in {"observe", "challenge"} else "risk"
+        
+        client_ip = html.escape(str(s.get("client_ip", "-")))
+        path = html.escape(str(s.get("last_path", "-")))
+        
+        reasons_list = []
+        if history:
+            reasons_list = history[-1].get("reasons", [])
+        
+        # Format reasons neatly
+        reasons_html = ""
+        for r in reasons_list[:4]:  # Show up to 4 reasons
+            r_cls = "tag-ok" if "passed" in r or "solved" in r else "tag-risk" if "fail" in r or "bad" in r or "bot" in r or "pregate" in r or "teleport" in r else "tag-warn"
+            reasons_html += f"<span class='tag {r_cls}'>{html.escape(r)}</span> "
+        if len(reasons_list) > 4:
+            reasons_html += f"<span class='tag tag-warn'>+{len(reasons_list) - 4} more</span>"
+        if not reasons_html:
+            reasons_html = "-"
+
         session_rows.append(
             f"<tr>"
-            f"<td>{sid}</td><td>{score:.1f}</td><td>{gate_diff}</td><td>{env_score}</td>"
-            f"<td>{proof_valid}</td><td>{challenges}</td><td>{traversal_ok}/{traversal_bad}</td>"
-            f"<td class='{cls}'>{html.escape(latest)}</td></tr>"
+            f"<td><div class='sid'>{sid}</div><div class='ip'>{client_ip}</div></td>"
+            f"<td class='path-col'>{path}</td>"
+            f"<td>{score:.1f}</td><td>{gate_diff}</td><td>{env_score}</td>"
+            f"<td>{proof_valid}</td>"
+            f"<td class='reasons-col'>{reasons_html}</td>"
+            f"<td class='{cls} fw-600'>{html.escape(latest).upper()}</td></tr>"
         )
     session_rows_html = "".join(session_rows) or "<tr><td colspan='8'>No sessions yet</td></tr>"
 
@@ -2605,6 +2623,15 @@ def render_telemetry_page(data: dict[str, Any]) -> str:
     .ok {{ color: var(--ok); }}
     .warn {{ color: var(--warn); }}
     .risk {{ color: var(--risk); }}
+    .fw-600 {{ font-weight: 600; }}
+    .sid {{ font-family: ui-monospace, monospace; color: var(--text); font-size: 0.8rem; }}
+    .ip {{ font-family: ui-monospace, monospace; color: var(--muted); font-size: 0.75rem; margin-top: 2px; }}
+    .path-col {{ max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); }}
+    .reasons-col {{ max-width: 250px; }}
+    .tag {{ display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; margin: 1px 2px 1px 0; border: 1px solid transparent; }}
+    .tag-ok {{ background: rgba(34, 197, 94, 0.1); color: var(--ok); border-color: rgba(34, 197, 94, 0.2); }}
+    .tag-warn {{ background: rgba(245, 158, 11, 0.1); color: var(--warn); border-color: rgba(245, 158, 11, 0.2); }}
+    .tag-risk {{ background: rgba(239, 68, 68, 0.1); color: var(--risk); border-color: rgba(239, 68, 68, 0.2); }}
     pre {{
       margin: 0;
       max-height: 360px;
@@ -2640,7 +2667,7 @@ def render_telemetry_page(data: dict[str, Any]) -> str:
         <h2>Session Decision Timeline</h2>
         <table>
           <thead>
-            <tr><th>Session</th><th>Score</th><th>Gate Diff</th><th>Env</th><th>Proof</th><th>Challenges</th><th>Traversal</th><th>Latest</th></tr>
+            <tr><th>Client ID & IP</th><th>Path</th><th>Score</th><th>Diff</th><th>Env</th><th>Stage 2</th><th>Reasons</th><th>Decision</th></tr>
           </thead>
           <tbody>{session_rows_html}</tbody>
         </table>
