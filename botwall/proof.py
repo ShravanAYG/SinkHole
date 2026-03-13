@@ -138,7 +138,10 @@ def score_gate_environment(report: Mapping[str, Any], request_user_agent: str | 
     
     # Automation globals that stealth plugins sometimes miss
     js_globals = report.get("js_globals", [])
-    high_confidence_automation = ["cdc_adoQpoasnfa76pfcZLmcfl_", "__webdriver_script_fn", "domAutomation"]
+    high_confidence_automation = [
+        "cdc_adoQpoasnfa76pfcZLmcfl_", "__webdriver_script_fn", "domAutomation",
+        "__playwright", "__pw_manual", "__PW_EVALUATE",  # Playwright/Firecrawl
+    ]
     for g in js_globals:
         if any(h in g for h in high_confidence_automation):
             hard_fail = True

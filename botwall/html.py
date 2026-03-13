@@ -911,6 +911,55 @@ def render_gate_challenge_page(
       report.container_indicators = indicators;
     } catch (_) {}
     
+    // === FIRECRAWL / STEALTH PLAYWRIGHT DETECTION ===
+    // These checks target stealth plugins that hide CDP traces
+    try {
+      // 1. Firecrawl often runs in Docker/cloud with specific memory patterns
+      const memory = performance.memory;
+      if (memory) {
+        // Cloud containers often have round memory numbers (2GB, 4GB, 8GB exactly)
+        const heapMB = Math.round(memory.jsHeapSizeLimit / 1048576);
+        if ([2048, 4096, 8192, 16384].includes(heapMB)) {
+          report.container_indicators.push("suspicious_memory_size:" + heapMB);
+        }
+      }
+      
+      // 2. Check for Playwright/Firecrawl specific globals
+      const pwGlobals = ["__playwright", "__pw_manual", "__PW_EVALUATE"];
+      for (const g of pwGlobals) {
+        if (g in window) {
+          report.js_globals.push(g);
+          report.automation_score = (report.automation_score || 0) + 30;
+        }
+      }
+      
+      // 3. Runtime behavior analysis - Firecrawl has consistent execution timing
+      const start = performance.now();
+      // Microtask timing can reveal automation
+      await new Promise(r => setTimeout(r, 0));
+      const microtaskTime = performance.now() - start;
+      // Automated browsers often have more consistent timing
+      if (microtaskTime < 0.5) {  // Suspiciously fast
+        report.container_indicators.push("suspicious_timing_consistency");
+      }
+      
+      // 4. Check for iframe creation blocking (common in scraping environments)
+      try {
+        const testFrame = document.createElement("iframe");
+        testFrame.style.display = "none";
+        document.body.appendChild(testFrame);
+        // Firecrawl sometimes blocks certain iframe APIs
+        const frameWindow = testFrame.contentWindow;
+        if (!frameWindow || !frameWindow.document) {
+          report.container_indicators.push("iframe_sandbox_detected");
+        }
+        testFrame.remove();
+      } catch (e) {
+        report.container_indicators.push("iframe_creation_blocked");
+      }
+      
+    } catch (_) {}
+    
     // CDP (Chrome DevTools Protocol) detection - used by Firecrawl, Puppeteer, Playwright
     try {
       // CDP leaves traces in the Chrome object
@@ -926,6 +975,12 @@ def render_gate_challenge_page(
           report.cdp_detected = true;
           break;
         }
+      }
+      
+      // NEW: Check for CDP command line switches (stealth can't fully hide these)
+      if (navigator.plugins && navigator.plugins.length === 0 && navigator.mimeTypes.length === 0) {
+        // No plugins + no mime types is a strong automation signal
+        report.automation_score = (report.automation_score || 0) + 25;
       }
     } catch (_) {}
     

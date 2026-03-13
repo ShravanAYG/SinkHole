@@ -224,8 +224,13 @@ def _redirect_explicit_scraper_to_decoy(
     session["updated_at"] = now_ts()
     store.store.save_session(session)
 
-    # Redirect to bot-caught page instead of regular decoy
-    response = RedirectResponse(url=f"/bw/bot-caught?sid={session_id}", status_code=302)
+    # Redirect to decoy hellhole for silent data poisoning
+    # Use node_id based on session hash for consistency
+    node_id_hash = hash(session_id) % settings.decoy_max_nodes
+    response = RedirectResponse(
+        url=f"/bw/decoy/{node_id_hash}?sid={session_id}&caught=1", 
+        status_code=302
+    )
     response.headers["x-botwall-decision"] = "decoy"
     response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
     _attach_cookie(response, settings, session_id)
