@@ -510,24 +510,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         is_bot = False
         reason = ""
         
-        # Check UA keywords
-        if any(kw.lower() in ua.lower() for kw in BOT_UA_KEYWORDS):
+        # Check if it's a REAL browser first (legitimate Firefox/Chrome/Safari/Edge)
+        # Real browsers have version patterns that bots rarely fake correctly
+        ua_lower = ua.lower()
+        is_real_browser = (
+            # Firefox with realistic version (rv:XXX.0 pattern)
+            ("firefox/" in ua_lower and "rv:" in ua_lower and "gecko/" in ua_lower)
+            or
+            # Chrome with realistic version (Chrome/XXX.0.0.0 pattern)
+            (re.search(r'Chrome/\d{3,4}\.0\.\d+\.\d+', ua) is not None)
+            or
+            # Safari
+            ("safari/" in ua_lower and "version/" in ua_lower)
+            or
+            # Edge
+            ("edg/" in ua_lower and re.search(r'Edg/\d{3}', ua) is not None)
+        )
+        
+        # Check UA keywords for obvious bots
+        if any(kw.lower() in ua_lower for kw in BOT_UA_KEYWORDS):
             is_bot = True
             reason = "bot_ua"
-        # Check datacenter IPs
-        elif any(client_ip.startswith(p) for p in DATACENTER_PREFIXES):
-            is_bot = True
-            reason = "datacenter_ip"
-        # Check ancient Chrome versions
+        # Check ancient Chrome versions (bots often use old Chrome strings)
         elif re.search(r'Chrome/[1-9]\b|Chrome/1[0-4]\b', ua):
             is_bot = True
             reason = "ancient_chrome"
+        # Check datacenter IPs BUT allow real browsers through
+        elif any(client_ip.startswith(p) for p in DATACENTER_PREFIXES):
+            if is_real_browser:
+                # Real browser from datacenter = allow through (could be VPN/proxy)
+                is_bot = False
+            else:
+                # Unknown client from datacenter = likely bot
+                is_bot = True
+                reason = "datacenter_ip+unknown_client"
         
         # Log classification
         import logging
         logger = logging.getLogger("sinkhole.gate")
         client_type = "bot" if is_bot else "human"
-        logger.warning(f"GATE_CHECK ip={client_ip} type={client_type} reason={reason} ua={ua[:60]!r}")
+        real_browser_flag = "real_browser" if is_real_browser else "unknown_client"
+        logger.warning(f"GATE_CHECK ip={client_ip} type={client_type} browser={real_browser_flag} reason={reason} ua={ua[:60]!r}")
         
         # BOT DETECTED → redirect to decoy immediately
         if is_bot:
