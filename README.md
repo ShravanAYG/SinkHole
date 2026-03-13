@@ -71,17 +71,6 @@ cd /home/bb/sinkhole
 .venv/bin/python scripts/localhost_integration_demo.py
 ```
 
-This runs a complete local flow with:
-
-- demo origin site
-- gateway simulation of reverse-proxy integration
-- SinkHole botwall
-- Stage-1 gate pass + Stage-2 challenge/proof + decoy + recovery validation
-
-## Integration Docs
-
-See `INTEGRATION_GUIDE.md` for Nginx-first integration and endpoint contracts.
-
 ## Config (env vars)
 
 - `BOTWALL_HOST` (default `127.0.0.1`)

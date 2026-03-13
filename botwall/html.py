@@ -237,7 +237,11 @@ def render_gate_challenge_page(
   <script>
     (() => {{
       try {{
+<<<<<<< HEAD
         const match = document.cookie.match(/(?:^|;\s*)bw_theme=([^;]+)/);
+=======
+        const match = document.cookie.match(/(?:^|;\\s*)bw_theme=([^;]+)/);
+>>>>>>> b4811a5 (stage 1 inttegrated)
         if (!match) return;
         const t = JSON.parse(decodeURIComponent(match[1]));
         const root = document.documentElement;
@@ -818,7 +822,11 @@ def render_challenge_page(*, session_id: str, token: str, nonce: str, target_pat
   <script>
     (() => {{
       try {{
+<<<<<<< HEAD
         const match = document.cookie.match(/(?:^|;\s*)bw_theme=([^;]+)/);
+=======
+        const match = document.cookie.match(/(?:^|;\\s*)bw_theme=([^;]+)/);
+>>>>>>> b4811a5 (stage 1 inttegrated)
         if (!match) return;
         const t = JSON.parse(decodeURIComponent(match[1]));
         const root = document.documentElement;
