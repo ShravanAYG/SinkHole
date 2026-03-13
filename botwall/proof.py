@@ -96,8 +96,8 @@ def verify_pow_solution(
     if difficulty <= 0:
         raise TokenError("invalid challenge difficulty")
 
-    if solve_ms < 50:
-        raise TokenError("solve time implausibly fast")
+    # solve_ms is client-reported and therefore untrusted; never fail only because
+    # a modern CPU solved quickly. Keep an upper-bound timeout guard.
     if solve_ms > max_solve_seconds * 1000:
         raise TokenError("solve time exceeded maximum")
 
