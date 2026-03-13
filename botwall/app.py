@@ -622,7 +622,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         payload = RecoveryStartResponse(
             recovery_token=token,
-            instruction='Call /bw/recovery/complete with acknowledgement: "I am human and need real content".',
+            instruction="Complete the mini-game on /bw/recovery; score and timing will be submitted automatically.",
         )
         response = JSONResponse(payload.model_dump(mode="json"), status_code=202)
         _attach_cookie(response, cfg, session_id)
@@ -648,8 +648,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid recovery token binding")
         if int(parsed.get("exp", 0)) < now:
             raise HTTPException(status_code=400, detail="recovery token expired")
-        if payload.acknowledgement.strip() != "I am human and need real content":
-            raise HTTPException(status_code=400, detail="acknowledgement mismatch")
+        if payload.duration_ms < 2500 or payload.duration_ms > 60000:
+            raise HTTPException(status_code=400, detail="invalid game duration")
+        if payload.hits < 8:
+            raise HTTPException(status_code=400, detail="insufficient game hits")
+        if payload.game_score < 35:
+            raise HTTPException(status_code=400, detail="insufficient game score")
+        attempts = max(1, payload.hits + payload.misses)
+        accuracy = payload.hits / attempts
+        if accuracy < 0.5:
+            raise HTTPException(status_code=400, detail="insufficient game accuracy")
 
         jti = str(parsed.get("jti"))
         if not store.store.mark_once("recovery_jti", jti, 300):
@@ -658,6 +666,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session["allow_until"] = now + cfg.recovery_allow_seconds
         session["score"] = float(session.get("score", 0.0) + 25.0)
         session.setdefault("reasons", []).append("recovery:completed")
+        session["recovery_game"] = {
+            "score": payload.game_score,
+            "hits": payload.hits,
+            "misses": payload.misses,
+            "duration_ms": payload.duration_ms,
+            "accuracy": round(accuracy, 3),
+        }
         store.store.save_session(session)
 
         result = RecoveryCompleteResponse(decision="allow", allow_until=int(session["allow_until"]))

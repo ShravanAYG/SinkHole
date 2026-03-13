@@ -237,11 +237,7 @@ def render_gate_challenge_page(
   <script>
     (() => {{
       try {{
-<<<<<<< HEAD
         const match = document.cookie.match(/(?:^|;\s*)bw_theme=([^;]+)/);
-=======
-        const match = document.cookie.match(/(?:^|;\\s*)bw_theme=([^;]+)/);
->>>>>>> b4811a5 (stage 1 inttegrated)
         if (!match) return;
         const t = JSON.parse(decodeURIComponent(match[1]));
         const root = document.documentElement;
@@ -822,11 +818,7 @@ def render_challenge_page(*, session_id: str, token: str, nonce: str, target_pat
   <script>
     (() => {{
       try {{
-<<<<<<< HEAD
         const match = document.cookie.match(/(?:^|;\s*)bw_theme=([^;]+)/);
-=======
-        const match = document.cookie.match(/(?:^|;\\s*)bw_theme=([^;]+)/);
->>>>>>> b4811a5 (stage 1 inttegrated)
         if (!match) return;
         const t = JSON.parse(decodeURIComponent(match[1]));
         const root = document.documentElement;
@@ -1055,16 +1047,180 @@ def render_origin_page(*, session_id: str, page_id: int, links: list[tuple[str, 
 
 
 def render_recovery_page(session_id: str) -> str:
+    sid_js = json.dumps(session_id)
     return f"""<!doctype html>
-<html>
-<head><meta charset="utf-8" /><title>Recovery</title></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow,noarchive" />
+  <title>Recovery Challenge</title>
+  <style>
+    :root {{ --bg:#0f1117; --surface:#1a1d27; --border:#2a2d3d; --text:#dbe6f4; --muted:#7f8ba5; --ok:#22c55e; --err:#ef4444; --accent:#4dd0e1; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin:0; min-height:100dvh; background:var(--bg); color:var(--text); font-family:"Inter", "Segoe UI", system-ui, sans-serif; display:flex; align-items:center; justify-content:center; padding:1rem; }}
+    .card {{ width:100%; max-width:580px; border:1px solid var(--border); border-radius:14px; background:var(--surface); padding:1rem; }}
+    h1 {{ margin:0 0 .35rem; font-size:1.2rem; }}
+    p {{ margin:.1rem 0 .7rem; color:var(--muted); }}
+    .hud {{ display:flex; gap:1rem; font-size:.86rem; margin:.4rem 0 .7rem; color:#bfd0e7; }}
+    .arena {{ position:relative; height:260px; border:1px dashed #334054; border-radius:10px; background:#111827; overflow:hidden; }}
+    .target {{ position:absolute; width:34px; height:34px; border:none; border-radius:999px; background:linear-gradient(135deg,#6ee7f9,#22c55e); cursor:pointer; box-shadow:0 0 0 2px rgba(255,255,255,.1); }}
+    .status {{ min-height:1.1rem; margin-top:.7rem; font-size:.88rem; }}
+    .status.ok {{ color:var(--ok); }}
+    .status.err {{ color:var(--err); }}
+    .retry {{ margin-top:.6rem; padding:.55rem .8rem; border:0; border-radius:8px; background:var(--accent); color:#04202a; font-weight:600; cursor:pointer; display:none; }}
+  </style>
+</head>
 <body>
-  <h1>Human Recovery</h1>
-  <p>Step 1: Start recovery.</p>
-  <form action="/bw/recovery/start" method="post">
-    <input type="hidden" name="session_id" value="{html.escape(session_id)}" />
-    <button type="submit">Start recovery</button>
-  </form>
+  <div class="card">
+    <h1>Human Recovery Mini-Game</h1>
+    <p>Hit moving targets for 10 seconds. This replaces manual acknowledgement.</p>
+    <div class="hud">
+      <span>Time: <strong id="time">10.0</strong>s</span>
+      <span>Hits: <strong id="hits">0</strong></span>
+      <span>Misses: <strong id="misses">0</strong></span>
+      <span>Score: <strong id="score">0</strong></span>
+    </div>
+    <div class="arena" id="arena"></div>
+    <div class="status" id="status" aria-live="polite">Starting challenge...</div>
+    <button id="retry" class="retry" type="button">Retry game</button>
+  </div>
+
+  <script>
+  const SESSION_ID = {sid_js};
+  const arena = document.getElementById("arena");
+  const statusEl = document.getElementById("status");
+  const retryBtn = document.getElementById("retry");
+  const hitsEl = document.getElementById("hits");
+  const missesEl = document.getElementById("misses");
+  const scoreEl = document.getElementById("score");
+  const timeEl = document.getElementById("time");
+
+  let token = "";
+  let hits = 0;
+  let misses = 0;
+  let score = 0;
+  let running = false;
+  let startedAt = 0;
+  let activeTarget = null;
+  let moveTimer = null;
+  let countdownTimer = null;
+
+  function resetGame() {{
+    hits = 0; misses = 0; score = 0;
+    hitsEl.textContent = "0";
+    missesEl.textContent = "0";
+    scoreEl.textContent = "0";
+    timeEl.textContent = "10.0";
+    if (activeTarget) {{ activeTarget.remove(); activeTarget = null; }}
+  }}
+
+  function placeTarget() {{
+    if (!running) return;
+    if (activeTarget) activeTarget.remove();
+    const t = document.createElement("button");
+    t.className = "target";
+    const maxX = Math.max(6, arena.clientWidth - 40);
+    const maxY = Math.max(6, arena.clientHeight - 40);
+    t.style.left = Math.floor(Math.random() * maxX) + "px";
+    t.style.top = Math.floor(Math.random() * maxY) + "px";
+    t.addEventListener("click", (e) => {{
+      e.stopPropagation();
+      hits += 1;
+      score += 5;
+      hitsEl.textContent = String(hits);
+      scoreEl.textContent = String(score);
+      placeTarget();
+    }});
+    arena.appendChild(t);
+    activeTarget = t;
+  }}
+
+  async function submitRecovery(durationMs) {{
+    const payload = {{
+      schema_version: "1.0",
+      session_id: SESSION_ID,
+      recovery_token: token,
+      game_score: score,
+      hits,
+      misses,
+      duration_ms: durationMs,
+    }};
+    const res = await fetch("/bw/recovery/complete", {{
+      method: "POST",
+      headers: {{ "content-type": "application/json" }},
+      body: JSON.stringify(payload),
+      credentials: "same-origin",
+    }});
+    if (!res.ok) {{
+      const txt = await res.text().catch(() => "");
+      throw new Error(txt || "Recovery validation failed");
+    }}
+    return res.json();
+  }}
+
+  async function startRecoverySession() {{
+    const r = await fetch("/bw/recovery/start", {{
+      method: "POST",
+      headers: {{ "content-type": "application/json" }},
+      body: JSON.stringify({{ schema_version: "1.0", session_id: SESSION_ID, reason: "false_positive" }}),
+      credentials: "same-origin",
+    }});
+    if (!r.ok) throw new Error("Unable to initialize recovery token");
+    const j = await r.json();
+    token = j.recovery_token;
+  }}
+
+  async function runGame() {{
+    retryBtn.style.display = "none";
+    statusEl.className = "status";
+    statusEl.textContent = "Initializing recovery challenge...";
+    resetGame();
+    await startRecoverySession();
+
+    running = true;
+    startedAt = Date.now();
+    statusEl.textContent = "Hit as many targets as you can";
+    placeTarget();
+
+    arena.onclick = () => {{
+      if (!running) return;
+      misses += 1;
+      missesEl.textContent = String(misses);
+    }};
+
+    moveTimer = setInterval(() => {{
+      if (running) placeTarget();
+    }}, 650);
+
+    countdownTimer = setInterval(async () => {{
+      const elapsed = Date.now() - startedAt;
+      const remain = Math.max(0, 10000 - elapsed);
+      timeEl.textContent = (remain / 1000).toFixed(1);
+      if (remain > 0) return;
+
+      running = false;
+      clearInterval(moveTimer);
+      clearInterval(countdownTimer);
+      if (activeTarget) {{ activeTarget.remove(); activeTarget = null; }}
+
+      try {{
+        statusEl.textContent = "Submitting recovery proof...";
+        await submitRecovery(elapsed);
+        statusEl.className = "status ok";
+        statusEl.textContent = "Recovery accepted. Redirecting...";
+        setTimeout(() => location.assign("/"), 350);
+      }} catch (err) {{
+        statusEl.className = "status err";
+        statusEl.textContent = "Recovery failed. Try again.";
+        retryBtn.style.display = "inline-block";
+      }}
+    }}, 100);
+  }}
+
+  retryBtn.addEventListener("click", () => {{ void runGame(); }});
+  void runGame();
+  </script>
 </body>
 </html>"""
 

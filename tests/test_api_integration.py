@@ -334,7 +334,10 @@ def test_headless_decoy_and_recovery(live_base_url: str) -> None:
         json={
             "session_id": sid,
             "recovery_token": token,
-            "acknowledgement": "I am human and need real content",
+            "game_score": 52,
+            "hits": 11,
+            "misses": 4,
+            "duration_ms": 10300,
         },
     )
     assert complete.status_code == 202

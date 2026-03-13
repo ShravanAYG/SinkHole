@@ -136,7 +136,10 @@ class RecoveryCompleteRequest(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
     session_id: str
     recovery_token: str
-    acknowledgement: str
+    game_score: int = 0
+    hits: int = 0
+    misses: int = 0
+    duration_ms: int = 0
 
 
 class RecoveryCompleteResponse(BaseModel):
