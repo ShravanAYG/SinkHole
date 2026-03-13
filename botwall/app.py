@@ -669,11 +669,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not store.store.mark_once("gate_pow_jti", pow_result.challenge_id, 300):
             return _reject(["pow:replay_detected"], "Challenge already used")
 
-        # Server-side timing: must have taken at least 1 second
         elapsed = pow_result.solved_at - pow_result.issued_at
-        if elapsed < 1:
-            return _reject([f"pow:too_fast:{elapsed}s"], "Solved too quickly")
-
         logger.warning(f"JS_VERIFY_POW_OK ip={client_ip} sid={session_id[:8]} difficulty={pow_result.difficulty} solve_ms={solve_ms} elapsed={elapsed}s")
 
         # ── Step 2: Validate environment checks ───────────────────────────

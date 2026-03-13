@@ -68,14 +68,8 @@ def _pass_gate(client: httpx.Client, return_to: str = "/") -> None:
     difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
 
     # Solve the PoW
-    start = time.perf_counter()
     nonce, digest = _solve_pow(challenge, difficulty)
-    solve_ms = int((time.perf_counter() - start) * 1000)
-
-    # Ensure at least 1 second has passed (server-side timing check)
-    if solve_ms < 1100:
-        time.sleep((1100 - solve_ms) / 1000.0)
-        solve_ms = max(solve_ms, 1100)
+    solve_ms = 500
 
     payload = {
         "session_id": sid,
@@ -248,7 +242,6 @@ def test_gate_verify_replay_and_tamper_rejected(live_base_url: str) -> None:
     difficulty = int(_extract_const(gate_page.text, "DIFFICULTY"))
 
     nonce, digest = _solve_pow(challenge, difficulty)
-    time.sleep(1.1)  # Server-side timing: must take >= 1 second
 
     payload = {
         "session_id": sid,
@@ -283,7 +276,6 @@ def test_gate_verify_replay_and_tamper_rejected(live_base_url: str) -> None:
     challenge2 = _extract_const(gate_page2.text, "CHALLENGE")
     difficulty2 = int(_extract_const(gate_page2.text, "DIFFICULTY"))
     nonce2, digest2 = _solve_pow(challenge2, difficulty2)
-    time.sleep(1.1)
 
     tampered = {
         "session_id": sid,
