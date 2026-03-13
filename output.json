@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "data": {
+    "markdown": "# Welcome to Shravan A Y's website\n\nI fill this website with stuff and all\n\n* * *\n\nStudent at Dayananda Sagar College of Engineering\n\n\n## My list of projects\n\n- **[DistZip](https://github.com/ShravanAYG/distZIP)**\n\n\nA network distributed file comperssor\n[\\[DOWNLOAD\\]](https://github.com/ShravanAYG/distZIP/archive/refs/heads/main.zip)\n- **[PrivacyManager](https://github.com/ShravanAYG/PrivacyManager)**\n\n\nA token based authenciation alternative to email login\n[\\[DOWNLOAD\\]](https://github.com/ShravanAYG/PrivacyManager/archive/refs/heads/main.zip)\n\n## Contact me\n\n- **Github:** [https://github.com/ShravanAYG](https://github.com/ShravanAYG)\n- **LinkedIn:** [https://www.linkedin.com/in/shravan-aniyoor](https://www.linkedin.com/in/shravan-aniyoor-1599aa345/)",
+    "metadata": {
+      "title": "Shravan's Website",
+      "scrapeId": "019ce5fb-77d2-74e8-b0dd-7fa297d91d07",
+      "sourceURL": "http://hacksinkhole.duckdns.org/",
+      "url": "http://hacksinkhole.duckdns.org/",
+      "statusCode": 200,
+      "contentType": "text/html",
+      "proxyUsed": "basic",
+      "cacheState": "hit",
+      "cachedAt": "2026-03-13T06:56:13.823Z",
+      "creditsUsed": 1,
+      "concurrencyLimited": false
+    }
+  }
+}
