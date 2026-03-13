@@ -221,7 +221,10 @@ def run_validation(base_url: str) -> None:
         json={
             "session_id": rec_sid,
             "recovery_token": rec_token,
-            "acknowledgement": "I am human and need real content",
+            "game_score": 57,
+            "hits": 11,
+            "misses": 4,
+            "duration_ms": 10100,
         },
     )
     assert_true(rec_complete.status_code == 202, "Expected recovery complete 202")

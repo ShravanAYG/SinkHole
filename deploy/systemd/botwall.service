@@ -1,0 +1,18 @@
+[Unit]
+Description=Botwall FastAPI Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/sinkhole
+Environment=BOTWALL_HOST=127.0.0.1
+Environment=BOTWALL_PORT=4101
+Environment=BOTWALL_SECRET_KEY=change-me
+Environment=BOTWALL_TELEMETRY_SECRET=change-me-too
+ExecStart=/home/ubuntu/sinkhole/.venv/bin/python -m botwall
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

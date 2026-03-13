@@ -166,6 +166,46 @@ def test_pow_challenge_solution_and_replay_bindings() -> None:
         pass
 
 
+def test_pow_accepts_fast_solve_time_when_hash_is_valid() -> None:
+    secret = "s3cr3t"
+    session_id = "sid-fast"
+    ip_hash = hash_client_ip("127.0.0.1", secret)
+
+    challenge = issue_pow_challenge(
+        secret=secret,
+        session_id=session_id,
+        ip_hash=ip_hash,
+        difficulty=2,
+        ttl_seconds=30,
+    )
+
+    target = "0" * challenge.difficulty
+    nonce = 0
+    solved_nonce = ""
+    solved_hash = ""
+    while True:
+        candidate = format(nonce, "x")
+        digest = hashlib.sha256((challenge.challenge + candidate).encode("utf-8")).hexdigest()
+        if digest.startswith(target):
+            solved_nonce = candidate
+            solved_hash = digest
+            break
+        nonce += 1
+
+    result = verify_pow_solution(
+        challenge_token=challenge.challenge_token,
+        secret=secret,
+        session_id=session_id,
+        ip_hash=ip_hash,
+        challenge=challenge.challenge,
+        nonce=solved_nonce,
+        submitted_hash=solved_hash,
+        solve_ms=1,
+        max_solve_seconds=30,
+    )
+    assert result.difficulty == 2
+
+
 def test_gate_token_ip_binding_and_env_scoring() -> None:
     secret = "s3cr3t"
     sid = "sid-1"

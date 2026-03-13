@@ -71,19 +71,6 @@ cd /home/bb/sinkhole
 .venv/bin/python scripts/localhost_integration_demo.py
 ```
 
-This runs a complete local flow with:
-
-- demo origin site
-- gateway simulation of reverse-proxy integration
-- SinkHole botwall
-- Stage-1 gate pass + Stage-2 challenge/proof + decoy + recovery validation
-
-## Integration Docs
-
-See `INTEGRATION_GUIDE.md` for Nginx-first integration and endpoint contracts.
-
-For running the full demo on another machine with Nginx on port 80, see [DEMO_RUNBOOK_PORT80.md](DEMO_RUNBOOK_PORT80.md).
-
 ## Config (env vars)
 
 - `BOTWALL_HOST` (default `127.0.0.1`)
@@ -102,3 +89,7 @@ For running the full demo on another machine with Nginx on port 80, see [DEMO_RU
 
 - Screenshot detection on the open web is heuristic only; this implementation does not claim deterministic screenshot detection.
 - Decoy responses set robots exclusion signals (`noindex/noarchive/nofollow`) and are isolated from normal content routes.
+
+## Deployment Automation
+
+- For push-to-deploy on AWS using GitHub Actions + SSH, see `CICD_AWS_SETUP.md`.

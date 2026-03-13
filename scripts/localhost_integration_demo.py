@@ -213,7 +213,10 @@ def run_demo(gateway_url: str) -> None:
         json={
             "session_id": rec_sid,
             "recovery_token": rec_token,
-            "acknowledgement": "I am human and need real content",
+            "game_score": 58,
+            "hits": 12,
+            "misses": 5,
+            "duration_ms": 10400,
         },
     )
     assert_true(rec_done.status_code == 202, f"Expected recovery complete 202, got {rec_done.status_code}")

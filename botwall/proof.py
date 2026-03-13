@@ -96,8 +96,8 @@ def verify_pow_solution(
     if difficulty <= 0:
         raise TokenError("invalid challenge difficulty")
 
-    if solve_ms < 50:
-        raise TokenError("solve time implausibly fast")
+    # solve_ms is client-reported and therefore untrusted; never fail only because
+    # a modern CPU solved quickly. Keep an upper-bound timeout guard.
     if solve_ms > max_solve_seconds * 1000:
         raise TokenError("solve time exceeded maximum")
 
@@ -118,53 +118,95 @@ def verify_pow_solution(
 
 
 def score_gate_environment(report: Mapping[str, Any], request_user_agent: str | None = None) -> tuple[int, list[str], bool]:
+    """
+    Score environment report from gate challenge.
+    Returns: (score_delta, reasons, hard_fail)
+    
+    Hardened against stealth browsers (Firecrawl, Puppeteer-stealth, etc.)
+    """
     score = 0
     reasons: list[str] = []
     hard_fail = False
 
-    ua = (request_user_agent or "").lower()
-
-    webdriver = bool(report.get("webdriver", False))
-    if webdriver:
+    # === ABSOLUTE HARD FAILS (cannot be bypassed by stealth) ===
+    
+    # CDP detection - Chrome DevTools Protocol leaves traces
+    if report.get("cdp_detected"):
         hard_fail = True
-        reasons.append("env:webdriver_true")
+        reasons.append("env:cdp_detected_hard_fail")
+        return score, reasons, hard_fail
+    
+    # Automation globals that stealth plugins sometimes miss
+    js_globals = report.get("js_globals", [])
+    high_confidence_automation = [
+        "cdc_adoQpoasnfa76pfcZLmcfl_", "__webdriver_script_fn", "domAutomation",
+        "__playwright", "__pw_manual", "__PW_EVALUATE",  # Playwright/Firecrawl
+    ]
+    for g in js_globals:
+        if any(h in g for h in high_confidence_automation):
+            hard_fail = True
+            reasons.append(f"env:automation_global_hard_fail:{g}")
+            return score, reasons, hard_fail
+    
+    # Container/cloud runtime detection
+    container_indicators = report.get("container_indicators", [])
+    if len(container_indicators) >= 3:
+        hard_fail = True
+        reasons.append("env:container_runtime_detected")
+        return score, reasons, hard_fail
+    
+    # Unnatural solve speed (impossible for humans)
+    solve_time_ms = report.get("solve_time_ms", 0)
+    if solve_time_ms > 0 and solve_time_ms < 400:  # Sub-400ms is definitely automated
+        score -= 50
+        reasons.append("env:impossible_solve_speed")
+        hard_fail = True
+        return score, reasons, hard_fail
+    elif solve_time_ms > 0 and solve_time_ms < 800:
+        score -= 35
+        reasons.append("env:suspicious_solve_speed")
 
-    chrome_obj = bool(report.get("chrome_obj", False))
-    if "chrome" in ua and not chrome_obj:
-        score -= 30
-        reasons.append("env:missing_window_chrome")
-
-    plugins_count = int(report.get("plugins_count", 0) or 0)
-    if plugins_count < 1:
+    # === HIGH CONFIDENCE SIGNALS (heavy penalties) ===
+    
+    # Automation score from client-side analysis
+    automation_score = report.get("automation_score", 0)
+    if automation_score >= 60:
+        score -= 50
+        reasons.append(f"env:high_automation_score:{automation_score}")
+        hard_fail = True
+    elif automation_score >= 40:
+        score -= 35
+        reasons.append(f"env:elevated_automation_score:{automation_score}")
+    elif automation_score >= 20:
+        score -= 20
+        reasons.append(f"env:moderate_automation_score:{automation_score}")
+    
+    # Hardware concurrency checks (servers often have high core counts)
+    hw_concurrency = report.get("hardware_concurrency", 0)
+    if hw_concurrency == 0:
         score -= 15
-        reasons.append("env:no_plugins")
-
-    languages = report.get("languages", [])
-    if not isinstance(languages, list):
-        languages = []
-    if len(languages) < 2:
+        reasons.append("env:no_hardware_concurrency")
+    elif hw_concurrency >= 32:  # Unlikely for consumer devices
+        score -= 20
+        reasons.append(f"env:suspicious_core_count:{hw_concurrency}")
+    
+    # Device memory (servers often have high RAM)
+    device_memory = report.get("device_memory", 0)
+    if device_memory == 0:
         score -= 10
-        reasons.append("env:low_language_count")
-
-    notification_api = bool(report.get("notification_api", False))
-    if not notification_api:
-        score -= 10
-        reasons.append("env:notification_api_missing")
-
-    perf_memory = bool(report.get("perf_memory", False))
-    if "chrome" in ua and not perf_memory:
-        score -= 10
-        reasons.append("env:performance_memory_missing")
-
+        reasons.append("env:no_device_memory")
+    elif device_memory >= 32:  # 32GB+ is uncommon for browsing
+        score -= 15
+        reasons.append(f"env:suspicious_memory:{device_memory}gb")
+    
+    # Screen dimensions consistency
     viewport = report.get("viewport", [0, 0])
-    width, height = 0, 0
-    if isinstance(viewport, list) and len(viewport) >= 2:
-        try:
-            width, height = int(viewport[0]), int(viewport[1])
-        except (TypeError, ValueError):
-            width, height = 0, 0
-
-    if width <= 0 or height <= 0 or (width == 800 and height == 600):
+    screen_avail = [report.get("screen_avail_width", 0), report.get("screen_avail_height", 0)]
+    if viewport[0] > 0 and screen_avail[0] > 0:
+        # Viewport should never exceed screen available
+        if viewport[0] > screen_avail[0] or viewport[1] > screen_avail[1]:
+            score -= 25
+            reasons.append("env:viewport_exceeds_screen")
         score -= 15
         reasons.append("env:viewport_suspicious")
 
@@ -173,6 +215,30 @@ def score_gate_environment(report: Mapping[str, Any], request_user_agent: str | 
     if not renderer or any(marker in renderer for marker in bad_renderer_markers):
         score -= 20
         reasons.append("env:webgl_renderer_suspicious")
+
+    # 8. Timing analysis - advanced crawlers often solve challenges too quickly/consistent
+    solve_time_ms = int(report.get("solve_time_ms", 0))
+    if solve_time_ms > 0 and solve_time_ms < 500:  # Unnaturally fast solve
+        score -= 25
+        reasons.append("env:unnatural_solve_speed")
+    
+    # 9. Screen/monitor detection - cloud browsers often have odd display configs
+    screen_avail_width = int(report.get("screen_avail_width", 0))
+    screen_avail_height = int(report.get("screen_avail_height", 0))
+    if screen_avail_width > 0 and screen_avail_height > 0:
+        # Check for headless common sizes
+        if (screen_avail_width, screen_avail_height) in [(800, 600), (1024, 768), (1280, 720), (1920, 1080)]:
+            if report.get("device_pixel_ratio", 1) == 1:  # Often exactly 1 in headless
+                score -= 10
+                reasons.append("env:common_headless_resolution")
+    
+    # 10. Plugin detail analysis - headless often has generic plugin names
+    plugins_detail = report.get("plugins_detail", [])
+    if isinstance(plugins_detail, list) and len(plugins_detail) > 0:
+        generic_names = ["Chrome PDF Plugin", "Native Client", "Widevine Content Decryption Module"]
+        if all(p.get("name", "") in generic_names for p in plugins_detail[:3]):
+            score -= 15
+            reasons.append("env:generic_plugin_fingerprint")
 
     return score, reasons, hard_fail
 

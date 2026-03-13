@@ -100,16 +100,16 @@ def post_json(path: str, payload: dict, cookies: str = "") -> tuple[int, dict, d
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SCENARIO 1-4: Bots hit the gate
+# SCENARIO 1-4: Bots hit the decoy immediately
 # ═══════════════════════════════════════════════════════════════════════════
-section("SCENARIO 1-4: Bot / Scraper probes (no gate cookie)")
+section("SCENARIO 1-4: Bot / Scraper probes (pre-gate decoy)")
 
 # 1. curl bare request
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "curl/7.81.0"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "1. curl bot → redirected to gate challenge",
+    status == 302 and "/bw/decoy/" in loc,
+    "1. curl bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 
@@ -117,8 +117,8 @@ check(
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "Wget/1.21.1"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "2. wget bot → redirected to gate challenge",
+    status == 302 and "/bw/decoy/" in loc,
+    "2. wget bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 
@@ -126,8 +126,8 @@ check(
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "python-requests/2.31.0"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "3. python-requests bot → redirected to gate challenge",
+    status == 302 and "/bw/decoy/" in loc,
+    "3. python-requests bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 
@@ -138,8 +138,8 @@ status, hdrs, body = req("GET", "/", headers={
 })
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/gate/challenge" in loc,
-    "4. HeadlessChrome + bad IP → redirected to gate (not served)",
+    status == 302 and "/bw/decoy/" in loc,
+    "4. HeadlessChrome + bad IP → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
 
@@ -421,7 +421,10 @@ if recov_token:
             "schema_version": "1.0",
             "session_id": recov_session,
             "recovery_token": recov_token,
-            "acknowledgement": "I am human and need real content",
+            "game_score": 55,
+            "hits": 11,
+            "misses": 4,
+            "duration_ms": 10200,
         },
         cookies=f"bw_sid={recov_session}",
     )
@@ -438,24 +441,30 @@ if recov_token:
             "schema_version": "1.0",
             "session_id": recov_session,
             "recovery_token": recov_token,
-            "acknowledgement": "I am human and need real content",
+            "game_score": 55,
+            "hits": 11,
+            "misses": 4,
+            "duration_ms": 10200,
         },
         cookies=f"bw_sid={recov_session}",
     )
     check(s_rr == 409, "13c. Replay of recovery token rejected with 409", f"HTTP {s_rr}")
 
-    # Wrong acknowledgement
+    # Invalid game payload
     s_rw, _, d_rw = post_json(
         "/bw/recovery/complete",
         {
             "schema_version": "1.0",
             "session_id": recov_session,
             "recovery_token": "fake.token",
-            "acknowledgement": "just let me in",
+            "game_score": 1,
+            "hits": 1,
+            "misses": 20,
+            "duration_ms": 800,
         },
         cookies=f"bw_sid={recov_session}",
     )
-    check(s_rw == 400, "13d. Wrong acknowledgement phrase rejected with 400", f"HTTP {s_rw}")
+    check(s_rw == 400, "13d. Invalid game payload rejected with 400", f"HTTP {s_rw}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

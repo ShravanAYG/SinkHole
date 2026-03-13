@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import urllib.parse
 import uuid
 from typing import Any
@@ -12,7 +13,28 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from .config import Settings, load_settings
 from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
-from .html import render_challenge_page, render_dashboard, render_decoy_page, render_gate_blocked_page, render_gate_challenge_page, render_origin_page, render_recovery_page, render_telemetry_page, sdk_script
+from .html import (
+    render_about_page,
+    render_behavioral_challenge_page,
+    render_blog_page,
+    render_blog_post_page,
+    render_challenge_page,
+    render_contact_page,
+    render_dashboard,
+    render_decoy_page,
+    render_gate_blocked_page,
+    render_gate_challenge_page,
+    render_origin_page,
+    render_products_page,
+    render_recovery_page,
+    render_search_page,
+    render_telemetry_page,
+    render_bot_caught_page,
+    render_test_suite_page,
+    render_enhanced_telemetry_page,
+    sdk_script,
+)
+from .js_verify_page import render_js_verify_page
 from .models import (
     BeaconEvent,
     CheckResponse,
@@ -94,6 +116,135 @@ def _request_meta(request: Request) -> dict[str, str]:
     }
 
 
+def _explicit_scraper_reasons(request: Request) -> list[str]:
+    ua = request.headers.get("user-agent", "").lower()
+    accept = request.headers.get("accept", "").lower().strip()
+    accept_language = request.headers.get("accept-language", "").strip()
+    ip_reputation = request.headers.get("x-ip-reputation", "unknown").lower().strip()
+    
+    # Advanced crawler service detection (Firecrawl, etc.)
+    # These services often have subtle signatures even with stealth browsers
+    advanced_markers = [
+        # Firecrawl specific patterns
+        "firecrawl",
+        "fire-crawl",
+        "fire_crawl",
+        # Common scraping services
+        "scrape",
+        "crawler",
+        "spider",
+        # Browser automation platforms
+        "browserless",
+        "puppeteer",
+        "playwright",
+        "selenium",
+        "webdriver",
+        "headlesschrome",
+        "headless-chrome",
+        # Cloud scraping services
+        "scrapingbee",
+        "scraperapi",
+        "zenrows",
+        "brightdata",
+        "oxylabs",
+        "smartproxy",
+    ]
+    
+    # Check for header anomalies that indicate automation
+    # Real browsers send detailed Accept headers
+    accept_suspicious = accept in {"", "*/*", "text/html", "text/html, */*"}
+    
+    # Check for missing or generic headers that browsers always send
+    dnt = request.headers.get("dnt")  # Do Not Track
+    sec_fetch_site = request.headers.get("sec-fetch-site")
+    sec_fetch_mode = request.headers.get("sec-fetch-mode")
+    
+    # Missing Sec-Fetch-* headers is a strong automation signal (modern browsers always send these)
+    missing_sec_fetch = not sec_fetch_site and not sec_fetch_mode
+    
+    # Check encoding preferences - real browsers always accept compressed responses
+    accept_encoding = request.headers.get("accept-encoding", "")
+    no_compression = not accept_encoding or "identity" in accept_encoding
+    
+    reasons: list[str] = []
+    
+    # Check for explicit scraper markers in User-Agent
+    for marker in advanced_markers:
+        if marker in ua:
+            reasons.append(f"pregate:explicit_scraper_ua:{marker}")
+            break
+    
+    # Check for Firecrawl-specific patterns in other headers
+    # Firecrawl sometimes uses specific proxy headers
+    via_header = request.headers.get("via", "").lower()
+    if "firecrawl" in via_header or "crawl" in via_header:
+        reasons.append("pregate:via_header_crawler")
+    
+    # Check for proxy service headers
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        # Multiple IPs in X-Forwarded-For often indicates proxy chaining (common in scraping services)
+        if forwarded_for.count(",") >= 2:
+            reasons.append("pregate:proxy_chain_detected")
+    
+    # CF-Connecting-IP or similar CDN headers without proper browser signals
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip and missing_sec_fetch:
+        reasons.append("pregate:cdn_ip_without_browser_signals")
+    
+    # If we've found scraper markers, add supporting evidence
+    if reasons:
+        if not accept_language:
+            reasons.append("pregate:missing_accept_language")
+        if accept_suspicious:
+            reasons.append("pregate:generic_accept_header")
+        if ip_reputation == "bad":
+            reasons.append("pregate:ip_reputation_bad")
+        if missing_sec_fetch:
+            reasons.append("pregate:missing_sec_fetch_headers")
+        if no_compression:
+            reasons.append("pregate:no_compression_support")
+            
+    return reasons
+
+
+def _redirect_explicit_scraper_to_decoy(
+    *,
+    request: Request,
+    settings: Settings,
+    store: StoreManager,
+    node_id: int,
+) -> Response | None:
+    reasons = _explicit_scraper_reasons(request)
+    if not reasons:
+        return None
+
+    session_id = _get_session_id(request, settings)
+    client_ip = _client_ip(request)
+    ip_hash = hash_client_ip(client_ip, settings.secret_key)
+    session = store.store.load_session(session_id, ip_hash)
+    if int(session.get("allow_until", 0)) > now_ts():
+        return None
+    session["score"] = min(float(session.get("score", 0.0)), settings.decoy_threshold - 5.0)
+    session.setdefault("reasons", []).extend(reasons)
+    _record_decision(session, "decoy", reasons)
+    session["last_user_agent"] = request.headers.get("user-agent", "")
+    session["updated_at"] = now_ts()
+    store.store.save_session(session)
+
+    # Redirect to decoy hellhole for silent data poisoning
+    # Use node_id based on session hash for consistency
+    node_id_hash = hash(session_id) % settings.decoy_max_nodes
+    response = RedirectResponse(
+        url=f"/bw/decoy/{node_id_hash}?sid={session_id}&caught=1", 
+        status_code=302
+    )
+    response.headers["x-botwall-decision"] = "decoy"
+    response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
+    _attach_cookie(response, settings, session_id)
+    return response
+
+
 def _make_links(settings: Settings, session_id: str, ip_hash: str, page_id: int) -> list[tuple[str, str]]:
     links: list[tuple[str, str]] = []
     for offset in [1, 2, 3]:
@@ -157,6 +308,84 @@ def _build_operator_telemetry_snapshot(store: StoreManager) -> dict[str, Any]:
         "metrics": metrics,
         "sessions": sessions,
         "telemetry": telemetry,
+    }
+
+
+def _build_enhanced_telemetry_snapshot(store: StoreManager) -> dict[str, Any]:
+    """Build enhanced telemetry with Phase 2 behavioral data."""
+    sessions = store.store.list_sessions(limit=300)
+    telemetry = store.store.list_telemetry(limit=300)
+
+    gate_passed = 0
+    proof_sessions = 0
+    decoy_sessions = 0
+    allow_sessions = 0
+    total_score = 0.0
+
+    # Phase 2 metrics
+    phase2_metrics = {
+        "mouse_teleport_detected": 0,
+        "instant_scroll_detected": 0,
+        "honeypot_interactions": 0,
+        "timing_trap_triggers": 0,
+        "robotic_typing": 0,
+        "sessions_with_phase2_data": 0,
+    }
+
+    for s in sessions:
+        total_score += float(s.get("score", 0.0))
+        if s.get("gate_passed_at"):
+            gate_passed += 1
+        if int(s.get("proof_valid", 0)) > 0:
+            proof_sessions += 1
+
+        history = s.get("decision_history", [])
+        if history:
+            latest = str(history[-1].get("decision", ""))
+            if latest == "decoy":
+                decoy_sessions += 1
+            if latest == "allow":
+                allow_sessions += 1
+
+        # Analyze Phase 2 data
+        events = s.get("events", [])
+        has_phase2 = False
+        for e in events:
+            p2 = e.get("phase2_data", {})
+            if p2:
+                has_phase2 = True
+                if p2.get("mouse_teleport_count", 0) > 0:
+                    phase2_metrics["mouse_teleport_detected"] += 1
+                if p2.get("instant_scroll_detected"):
+                    phase2_metrics["instant_scroll_detected"] += 1
+                if p2.get("honeypot_hits"):
+                    phase2_metrics["honeypot_interactions"] += len(p2["honeypot_hits"])
+                if p2.get("timing_traps"):
+                    phase2_metrics["timing_trap_triggers"] += sum(
+                        1 for t in p2["timing_traps"] if t.get("triggered")
+                    )
+                if p2.get("keystroke_dwell_cv", 0) < 0.05 and p2.get("keystrokes"):
+                    phase2_metrics["robotic_typing"] += 1
+
+        if has_phase2:
+            phase2_metrics["sessions_with_phase2_data"] += 1
+
+    metrics = {
+        "sessions_total": len(sessions),
+        "gate_passed": gate_passed,
+        "proof_sessions": proof_sessions,
+        "decoy_sessions": decoy_sessions,
+        "allow_sessions": allow_sessions,
+        "avg_score": (total_score / len(sessions)) if sessions else 0.0,
+        "phase2": phase2_metrics,
+    }
+
+    return {
+        "store_backend": store.backend,
+        "metrics": metrics,
+        "sessions": sessions,
+        "telemetry": telemetry,
+        "generated_at": now_ts(),
     }
 
 
@@ -261,130 +490,367 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ── Stage 1: Entry Gate ────────────────────────────────────────────────────
 
     @app.get("/bw/gate/challenge")
-    async def bw_gate_challenge(request: Request, path: str = "/") -> HTMLResponse:
+    async def bw_gate_challenge(request: Request, path: str = "/") -> Response:
         """
-        Serve the PoW challenge page.
-        The page JS auto-starts solving; no user click needed.
-        Submit solution to /bw/gate/verify → gate cookie is set → redirect to `path`.
+        Simple bot detection using hardcoded rules.
+        Bots → redirect to decoy immediately.
+        Humans → issue gate cookie and redirect to content (no CAPTCHA).
         """
+        import re
+        
         session_id = _get_session_id(request, cfg)
-        client_ip  = _client_ip(request)
-        ip_hash    = hash_client_ip(client_ip, cfg.secret_key)
-        ip_rep     = request.headers.get("x-ip-reputation", "unknown")
-        session    = store.store.load_session(session_id, ip_hash)
-        failures   = int(session.get("gate_failures", 0))
-        difficulty = (
-            cfg.pow_elevated_difficulty
-            if ip_rep == "bad" or failures >= 2
-            else cfg.pow_default_difficulty
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        ua = request.headers.get("user-agent", "")
+        
+        # Simple hardcoded rules
+        BOT_UA_KEYWORDS = ["bot", "crawler", "spider", "Claude-User", "Googlebot", "firecrawl", "crawl4ai", "scrapy", "crawl"]
+        HEADLESS_MARKERS = ["headless", "selenium", "webdriver", "puppeteer", "playwright", "cdp_", "automation"]
+        DATACENTER_PREFIXES = ["34.", "195.64.", "113.30.", "110.225."]
+        
+        # Classification
+        is_bot = False
+        reason = ""
+        
+        # Check if it's a REAL browser first (legitimate Firefox/Chrome/Safari/Edge)
+        # Real browsers have version patterns that bots rarely fake correctly
+        ua_lower = ua.lower()
+        is_real_browser = (
+            # Firefox with realistic version (rv:XXX.0 pattern)
+            ("firefox/" in ua_lower and "rv:" in ua_lower and "gecko/" in ua_lower)
+            or
+            # Chrome with realistic version (Chrome/XXX.0.0.0 pattern, 100+)
+            (re.search(r'Chrome/\d{3,4}\.0\.\d+\.\d+', ua) is not None)
+            or
+            # Safari
+            ("safari/" in ua_lower and "version/" in ua_lower)
+            or
+            # Edge
+            ("edg/" in ua_lower and re.search(r'Edg/\d{3}', ua) is not None)
         )
-        pow_challenge = issue_pow_challenge(
-            secret=cfg.secret_key,
-            session_id=session_id,
-            ip_hash=ip_hash,
-            difficulty=difficulty,
-            ttl_seconds=cfg.pow_max_solve_seconds + 5,
-        )
-        page = render_gate_challenge_page(
-            session_id=session_id,
-            challenge_token=pow_challenge.challenge_token,
-            challenge=pow_challenge.challenge,
-            difficulty=difficulty,
-            return_to=path,
-        )
+        
+        # Check for headless/automation markers (strong bot signal)
+        has_headless = any(marker in ua_lower for marker in HEADLESS_MARKERS)
+        
+        # Check UA keywords for obvious bots
+        if any(kw.lower() in ua_lower for kw in BOT_UA_KEYWORDS):
+            is_bot = True
+            reason = "bot_ua"
+        # Check headless/automation markers
+        elif has_headless:
+            is_bot = True
+            reason = "headless_marker"
+        # Check ancient Chrome versions (bots often use old Chrome strings like Chrome/14)
+        # Firecrawler uses ancient Chrome versions
+        elif re.search(r'Chrome/\d{1,2}\.0', ua) and not re.search(r'Chrome/\d{3,4}\.0', ua):
+            is_bot = True
+            reason = "ancient_chrome"
+        # Check datacenter IPs BUT allow real browsers through
+        elif any(client_ip.startswith(p) for p in DATACENTER_PREFIXES):
+            if is_real_browser and not has_headless:
+                # Real browser from datacenter = allow through (could be VPN/proxy)
+                is_bot = False
+            else:
+                # Unknown client from datacenter = likely bot
+                is_bot = True
+                reason = "datacenter_ip+unknown_client"
+        
+        # Log classification
+        import logging
+        logger = logging.getLogger("sinkhole.gate")
+        client_type = "bot" if is_bot else "human"
+        real_browser_flag = "real_browser" if is_real_browser else "unknown_client"
+        logger.warning(f"GATE_CHECK ip={client_ip} type={client_type} browser={real_browser_flag} reason={reason} ua={ua[:60]!r}")
+        
+        # BOT DETECTED → redirect to decoy immediately
+        if is_bot:
+            session = store.store.load_session(session_id, ip_hash)
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).append(f"gate:{reason}")
+            session["client_classification"] = client_type
+            session["detected_ua"] = ua[:200]
+            _record_decision(session, "decoy", [reason])
+            store.store.save_session(session)
+            
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            logger.warning(f"GATE_BLOCK ip={client_ip} reason={reason} redirect=/bw/decoy/{node_id}")
+            return RedirectResponse(
+                url=f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type={client_type}&reason={reason}",
+                status_code=302
+            )
+        
+        # HUMAN → serve JS verification page (runs browser checks before issuing gate cookie)
+        logger.warning(f"GATE_JS_VERIFY ip={client_ip} path={path}")
+        page = render_js_verify_page(session_id=session_id, path=path)
         response = HTMLResponse(page)
         response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True, samesite="lax", path="/")
         return response
 
-    @app.post("/bw/gate/verify", response_model=GateVerifyResponse)
-    async def bw_gate_verify(payload: GateVerifyRequest, request: Request) -> Response:
+    @app.post("/bw/js-verify")
+    async def bw_js_verify(request: Request) -> JSONResponse:
         """
-        Validate PoW solution and browser env report.
-        Success → issues bw_gate cookie, returns {next_path} JSON for JS redirect.
-        Hard-fail (webdriver detected) → 403 HTML with elevated re-challenge.
+        Verify client-side JS browser checks.
+        If checks pass → issue gate cookie and allow.
+        If checks fail → redirect to decoy.
         """
-        client_ip  = _client_ip(request)
-        ip_hash    = hash_client_ip(client_ip, cfg.secret_key)
-        now        = now_ts()
-        session_id = payload.session_id
-        session    = store.store.load_session(session_id, ip_hash)
-
-        # 1. PoW verification
+        body = await request.body()
         try:
-            pow_result = verify_pow_solution(
-                challenge_token=payload.challenge_token,
-                secret=cfg.secret_key,
-                session_id=session_id,
-                ip_hash=ip_hash,
-                challenge=payload.challenge,
-                nonce=payload.nonce,
-                submitted_hash=payload.hash,
-                solve_ms=int(payload.solve_ms),
-                max_solve_seconds=cfg.pow_max_solve_seconds,
-            )
-        except TokenError as exc:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+        
+        session_id = data.get("session_id")
+        checks = data.get("checks", {})
+        
+        if not session_id:
+            return JSONResponse({"ok": False, "error": "Missing session_id"}, status_code=400)
+        
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        session = store.store.load_session(session_id, ip_hash)
+        
+        passed = int(checks.get("passed", 0))
+        failed = int(checks.get("failed", 0))
+        details = checks.get("details", [])
+        
+        # Log the JS verification attempt
+        import logging
+        logger = logging.getLogger("sinkhole.gate")
+        logger.warning(f"JS_VERIFY ip={client_ip} sid={session_id[:8]} passed={passed} failed={failed} details={details}")
+        
+        # Check for bot indicators in JS results
+        is_bot = False
+        bot_reasons = []
+        
+        # If webdriver detected, it's a bot
+        if "webdriver_detected" in details:
+            is_bot = True
+            bot_reasons.append("js:webdriver_detected")
+        
+        # If too many checks failed, likely a headless browser
+        if failed >= 3:
+            is_bot = True
+            bot_reasons.append(f"js:too_many_checks_failed:{failed}")
+        
+        # If no plugins and no canvas, likely automation
+        if "no_plugins" in details and "canvas_fail" in details:
+            is_bot = True
+            bot_reasons.append("js:missing_browser_features")
+        
+        # Must have passed at least 5 checks to be considered human
+        if passed < 5:
+            is_bot = True
+            bot_reasons.append(f"js:insufficient_passed_checks:{passed}")
+        
+        if is_bot:
             session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).extend(bot_reasons)
+            session["js_verification_failed"] = True
+            session["js_check_details"] = details
+            _record_decision(session, "decoy", bot_reasons)
             store.store.save_session(session)
-            raise HTTPException(status_code=400, detail=f"PoW failed: {exc}") from exc
-
-        # Anti-replay: one gate token per challenge
-        if not store.store.mark_once("gate_jti", pow_result.challenge_id, cfg.gate_ttl_seconds):
-            raise HTTPException(status_code=409, detail="challenge replay detected")
-
-        # 2. Environment scoring
-        env_dict = payload.env.model_dump()
-        ua = request.headers.get("user-agent", "")
-        env_score, env_reasons, hard_fail = score_gate_environment(env_dict, request_user_agent=ua)
-
-        # 3. Hard fail: issue elevated challenge page as 403 HTML
-        if hard_fail:
-            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
-            store.store.save_session(session)
-            elevated = issue_pow_challenge(
-                secret=cfg.secret_key,
-                session_id=session_id,
-                ip_hash=ip_hash,
-                difficulty=cfg.pow_elevated_difficulty,
-                ttl_seconds=cfg.pow_max_solve_seconds + 5,
-            )
-            blocked_page = render_gate_blocked_page(
-                session_id=session_id,
-                challenge_token=elevated.challenge_token,
-                challenge=elevated.challenge,
-                difficulty=cfg.pow_elevated_difficulty,
-                return_to=payload.return_to,
-                reasons=env_reasons,
-            )
-            return HTMLResponse(content=blocked_page, status_code=403)
-
-        # 4. Issue gate token
+            
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            logger.warning(f"JS_VERIFY_BLOCK ip={client_ip} reasons={bot_reasons}")
+            return JSONResponse({
+                "ok": False,
+                "decision": "decoy",
+                "error": "Browser verification failed",
+                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1&type=bot&reason=js_verification_failed",
+            }, status_code=403)
+        
+        # JS verification passed → issue gate cookie
         gate_token = issue_gate_token(
             secret=cfg.secret_key,
             session_id=session_id,
             ip_hash=ip_hash,
-            solved_difficulty=pow_result.difficulty,
-            env_score=env_score,
+            solved_difficulty=1,
+            env_score=0,
             ttl_seconds=cfg.gate_ttl_seconds,
         )
-        session["gate_passed_at"]  = now
-        session["gate_env_score"]  = env_score
-        session["gate_difficulty"] = pow_result.difficulty
-        session["gate_failures"]   = 0
+        
+        session["gate_passed_at"] = now_ts()
+        session["gate_env_score"] = 0
+        session["gate_failures"] = 0
+        session["js_verification_passed"] = True
+        session["js_check_details"] = details
+        _record_decision(session, "allow", ["js_verification:passed"])
         store.store.save_session(session)
+        
+        logger.warning(f"JS_VERIFY_ALLOW ip={client_ip}")
+        
+        return JSONResponse({
+            "ok": True,
+            "decision": "allow",
+            "next_path": data.get("return_path", "/"),
+        })
 
-        resp_data = GateVerifyResponse(
-            session_id=session_id,
-            decision="allow",
-            env_score=env_score,
-            next_path=payload.return_to or "/",
-            gate_expires_at=now + cfg.gate_ttl_seconds,
-            reasons=env_reasons,
+    @app.post("/bw/gate/verify")
+    async def bw_gate_verify(request: Request) -> Response:
+        """
+        Verify behavioral CAPTCHA submission.
+        Analyzes mouse patterns, keystroke dynamics, and timing.
+        Bot detected → redirect to decoy. Human → gate cookie issued.
+        """
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="invalid JSON")
+        
+        session_id = data.get("session_id")
+        behavioral_data = data.get("behavioral_data", {})
+        return_to = data.get("return_to", "/")
+        env_report = data.get("env", {})
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="missing session_id")
+        
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        session = store.store.load_session(session_id, ip_hash)
+        now = now_ts()
+        
+        # First: check environment signals for hard-fail automation markers
+        env_dict = env_report if isinstance(env_report, dict) else {}
+        ua = request.headers.get("user-agent", "")
+        env_score, env_reasons, hard_fail = score_gate_environment(env_dict, request_user_agent=ua)
+        
+        # Hard fail: automation detected in env report → immediate decoy
+        if hard_fail:
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).extend(env_reasons)
+            _record_decision(session, "decoy", env_reasons)
+            store.store.save_session(session)
+            
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            return JSONResponse({
+                "decision": "decoy",
+                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1",
+                "reasons": env_reasons,
+            }, status_code=403)
+        
+        # Score behavioral patterns
+        from .behavioral import (
+            score_advanced_mouse_patterns,
+            score_advanced_keystrokes,
         )
-        response = JSONResponse(resp_data.model_dump(mode="json"))
-        response.set_cookie(key=cfg.gate_cookie, value=gate_token, httponly=True,
-                            samesite="lax", max_age=cfg.gate_ttl_seconds, path="/")
-        response.set_cookie(key=cfg.session_cookie, value=session_id, httponly=True,
-                            samesite="lax", path="/")
+        
+        total_score = float(env_score)  # Start with env score
+        all_reasons = list(env_reasons)
+        all_risks: list[str] = []
+        
+        # Score mouse patterns
+        mouse_data = behavioral_data.get("mouse_data", {})
+        if mouse_data:
+            mouse_result = score_advanced_mouse_patterns(mouse_data)
+            total_score += mouse_result.delta
+            all_reasons.extend(mouse_result.reasons)
+            all_risks.extend(mouse_result.risk_flags)
+        
+        # Score keystrokes
+        keystrokes = behavioral_data.get("keystrokes", [])
+        if keystrokes:
+            keystroke_result = score_advanced_keystrokes(keystrokes)
+            total_score += keystroke_result.delta
+            all_reasons.extend(keystroke_result.reasons)
+            all_risks.extend(keystroke_result.risk_flags)
+        
+        # Check timing anomalies
+        timing = behavioral_data.get("timing", {})
+        total_duration = timing.get("total_duration_ms", 0)
+        
+        # Too fast = bot (impossible for human to complete)
+        if total_duration > 0 and total_duration < 2000:
+            total_score -= 30
+            all_reasons.append("captcha:impossible_speed")
+            all_risks.append("IMPOSSIBLE_SPEED")
+        
+        # Perfectly consistent timing = robotic
+        if keystrokes and len(keystrokes) > 5:
+            dwell_times = [k.get("dwell", 0) for k in keystrokes if k.get("dwell")]
+            if dwell_times and len(dwell_times) > 1:
+                import statistics
+                mean_dwell = statistics.mean(dwell_times)
+                if mean_dwell > 0:
+                    cv = statistics.pstdev(dwell_times) / mean_dwell
+                    if cv < 0.1:  # Too consistent
+                        total_score -= 25
+                        all_reasons.append("captcha:robotic_timing")
+                        all_risks.append("ROBOTIC_TIMING")
+        
+        # Check for missing/insufficient behavioral data (bot didn't interact)
+        if not mouse_data or len(mouse_data.get("points", [])) < 10:
+            total_score -= 20
+            all_reasons.append("captcha:insufficient_mouse_data")
+            all_risks.append("NO_MOUSE_MOVEMENT")
+        
+        if not keystrokes or len(keystrokes) < 5:
+            total_score -= 20
+            all_reasons.append("captcha:insufficient_keystrokes")
+            all_risks.append("NO_TYPING")
+        
+        # BOT DETECTION: negative score or critical risk flags → decoy
+        is_bot = (
+            total_score < -20 
+            or "MOUSE_TELEPORT" in all_risks 
+            or "ROBOTIC_TYPING" in all_risks
+            or "INSTANT_TYPING" in all_risks
+            or "NO_MOUSE_MOVEMENT" in all_risks
+            or "IMPOSSIBLE_SPEED" in all_risks
+        )
+        
+        if is_bot:
+            session["gate_failures"] = int(session.get("gate_failures", 0)) + 1
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 10.0)
+            session.setdefault("reasons", []).extend(all_reasons)
+            _record_decision(session, "decoy", all_reasons)
+            store.store.save_session(session)
+            
+            node_id = hash(session_id) % cfg.decoy_max_nodes
+            return JSONResponse({
+                "decision": "decoy",
+                "score": total_score,
+                "next_path": f"/bw/decoy/{node_id}?sid={session_id}&caught=1",
+                "reasons": all_reasons,
+                "risks": all_risks,
+            }, status_code=403)
+        
+        # HUMAN VERIFIED: issue gate token
+        gate_token = issue_gate_token(
+            secret=cfg.secret_key,
+            session_id=session_id,
+            ip_hash=ip_hash,
+            solved_difficulty=1,
+            env_score=int(total_score),
+            ttl_seconds=cfg.gate_ttl_seconds,
+        )
+        
+        session["gate_passed_at"] = now
+        session["gate_env_score"] = int(total_score)
+        session["gate_failures"] = 0
+        session["behavioral_captcha_passed"] = True
+        _record_decision(session, "allow", all_reasons)
+        store.store.save_session(session)
+        
+        response = JSONResponse({
+            "decision": "allow",
+            "score": total_score,
+            "next_path": return_to,
+            "gate_expires_at": now + cfg.gate_ttl_seconds,
+            "reasons": all_reasons,
+        })
+        response.set_cookie(
+            key=cfg.gate_cookie,
+            value=gate_token,
+            httponly=True,
+            samesite="lax",
+            max_age=cfg.gate_ttl_seconds,
+            path="/",
+        )
         return response
 
     @app.get("/bw/gate/check")
@@ -418,19 +884,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def bw_check(request: Request) -> JSONResponse:
         fallback = request.query_params.get("path", "/")
         target_path = _canonical_target_path(request, fallback)
-
-        # Enforce Stage 1 gate cookie on the auth_request endpoint
-        client_ip = _client_ip(request)
-        ip_hash_pre = hash_client_ip(client_ip, cfg.secret_key)
-        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash_pre)
-        if not gate_ok:
-            response = JSONResponse(
-                {"session_id": "", "decision": "gate", "score": 0.0, "reasons": ["gate:missing_or_invalid"]},
-                status_code=401,
+        pre_gate_reasons = _explicit_scraper_reasons(request)
+        if pre_gate_reasons:
+            session_id = _get_session_id(request, cfg)
+            client_ip = _client_ip(request)
+            ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+            session = store.store.load_session(session_id, ip_hash)
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 5.0)
+            session.setdefault("reasons", []).extend(pre_gate_reasons)
+            _record_decision(session, "decoy", pre_gate_reasons)
+            store.store.save_session(session)
+            payload = CheckResponse(
+                session_id=session_id,
+                decision="decoy",
+                score=float(session.get("score", 0.0)),
+                reasons=pre_gate_reasons,
             )
-            response.headers["x-botwall-decision"] = "gate"
+            response = JSONResponse(payload.model_dump(mode="json"))
+            response.headers["x-botwall-decision"] = "decoy"
+            response.headers["x-botwall-score"] = f"{float(session.get('score', 0.0)):.2f}"
+            response.headers["x-botwall-reasons"] = ",".join(pre_gate_reasons[-6:])
+            _attach_cookie(response, cfg, session_id)
             return response
-
         require_traversal = target_path.startswith("/content/")
         session, session_id, reasons, decision, _ = _evaluate_request(
             request=request,
@@ -592,6 +1067,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _attach_cookie(response, cfg, session_id)
         return response
 
+    @app.get("/bw/bot-caught")
+    async def bw_bot_caught(request: Request) -> HTMLResponse:
+        """Bot/scraper detection page - shows 'YOU LOWDE BOT' message."""
+        session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        session = store.store.load_session(session_id, ip_hash)
+
+        # Get the reasons why this was flagged as a bot
+        reasons = session.get("reasons", [])
+        user_agent = session.get("last_user_agent", request.headers.get("user-agent", ""))
+
+        response = HTMLResponse(render_bot_caught_page(
+            session_id=session_id,
+            user_agent=user_agent,
+            reasons=reasons[-6:] if reasons else None
+        ))
+        response.headers["x-botwall-decision"] = "bot_caught"
+        response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
+        _attach_cookie(response, cfg, session_id)
+        return response
+
     @app.get("/bw/recovery")
     async def bw_recovery(request: Request) -> HTMLResponse:
         session_id = _get_session_id(request, cfg)
@@ -635,7 +1132,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         payload = RecoveryStartResponse(
             recovery_token=token,
-            instruction='Call /bw/recovery/complete with acknowledgement: "I am human and need real content".',
+            instruction="Complete the mini-game on /bw/recovery; score and timing will be submitted automatically.",
         )
         response = JSONResponse(payload.model_dump(mode="json"), status_code=202)
         _attach_cookie(response, cfg, session_id)
@@ -661,8 +1158,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid recovery token binding")
         if int(parsed.get("exp", 0)) < now:
             raise HTTPException(status_code=400, detail="recovery token expired")
-        if payload.acknowledgement.strip() != "I am human and need real content":
-            raise HTTPException(status_code=400, detail="acknowledgement mismatch")
+        if payload.duration_ms < 2500 or payload.duration_ms > 60000:
+            raise HTTPException(status_code=400, detail="invalid game duration")
+        if payload.hits < 8:
+            raise HTTPException(status_code=400, detail="insufficient game hits")
+        if payload.game_score < 35:
+            raise HTTPException(status_code=400, detail="insufficient game score")
+        attempts = max(1, payload.hits + payload.misses)
+        accuracy = payload.hits / attempts
+        if accuracy < 0.5:
+            raise HTTPException(status_code=400, detail="insufficient game accuracy")
 
         jti = str(parsed.get("jti"))
         if not store.store.mark_once("recovery_jti", jti, 300):
@@ -671,10 +1176,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session["allow_until"] = now + cfg.recovery_allow_seconds
         session["score"] = float(session.get("score", 0.0) + 25.0)
         session.setdefault("reasons", []).append("recovery:completed")
+        session["recovery_game"] = {
+            "score": payload.game_score,
+            "hits": payload.hits,
+            "misses": payload.misses,
+            "duration_ms": payload.duration_ms,
+            "accuracy": round(accuracy, 3),
+        }
         store.store.save_session(session)
 
         result = RecoveryCompleteResponse(decision="allow", allow_until=int(session["allow_until"]))
         response = JSONResponse(result.model_dump(mode="json"), status_code=202)
+        gate_token = issue_gate_token(
+            secret=cfg.secret_key,
+            session_id=session_id,
+            ip_hash=ip_hash,
+            solved_difficulty=int(session.get("gate_difficulty", cfg.pow_default_difficulty)),
+            env_score=int(session.get("gate_env_score", 0)),
+            ttl_seconds=cfg.gate_ttl_seconds,
+        )
+        response.set_cookie(
+            key=cfg.gate_cookie,
+            value=gate_token,
+            httponly=True,
+            samesite="lax",
+            max_age=cfg.gate_ttl_seconds,
+            path="/",
+        )
         _attach_cookie(response, cfg, session_id)
         return response
 
@@ -746,6 +1274,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/")
     async def home(request: Request) -> Response:
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
         client_ip = _client_ip(request)
         ip_hash   = hash_client_ip(client_ip, cfg.secret_key)
         gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
@@ -779,6 +1311,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/content/{page_id}")
     async def content_page(page_id: int, request: Request) -> Response:
         target_path = f"/content/{page_id}"
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=page_id)
+        if pre_gate is not None:
+            return pre_gate
+
         client_ip   = _client_ip(request)
         ip_hash_pre = hash_client_ip(client_ip, cfg.secret_key)
         gate_ok, _  = _check_gate_cookie(request, cfg, ip_hash_pre)
@@ -809,6 +1345,485 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = HTMLResponse(page)
         response.headers["x-botwall-decision"] = decision
         response.headers["x-botwall-reasons"] = ",".join(reasons[-6:])
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    # ── Regular Website Pages ──────────────────────────────────────────────────
+
+    @app.get("/about")
+    async def about_page(request: Request) -> Response:
+        """About page with company information."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/about", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/about", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_about_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/contact")
+    async def contact_page(request: Request) -> Response:
+        """Contact page with form including honeypot protection."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/contact", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/contact", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_contact_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/products")
+    async def products_page(request: Request) -> Response:
+        """Products and pricing page."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/products", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/products", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_products_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/blog")
+    async def blog_page(request: Request) -> Response:
+        """Blog listing page with all articles."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/blog", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/blog", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_blog_page(session_id=session_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/blog/{post_id}")
+    async def blog_post_page(request: Request, post_id: int) -> Response:
+        """Individual blog post page."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            encoded = urllib.parse.quote(f"/blog/{post_id}", safe="/")
+            return RedirectResponse(url=f"/bw/gate/challenge?path={encoded}", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path=f"/blog/{post_id}", require_traversal=True,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        page = render_blog_post_page(session_id=session_id, post_id=post_id)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/search")
+    async def search_page(request: Request, q: str = "") -> Response:
+        """Search page with results."""
+        pre_gate = _redirect_explicit_scraper_to_decoy(request=request, settings=cfg, store=store, node_id=0)
+        if pre_gate is not None:
+            return pre_gate
+
+        client_ip = _client_ip(request)
+        ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+        gate_ok, _ = _check_gate_cookie(request, cfg, ip_hash)
+        if not gate_ok:
+            return RedirectResponse(url="/bw/gate/challenge?path=/search", status_code=302)
+
+        session, session_id, reasons, decision, ip_hash = _evaluate_request(
+            request=request, settings=cfg, store=store, target_path="/search", require_traversal=False,
+        )
+        if decision == "decoy":
+            return RedirectResponse(url=f"/bw/decoy/0?sid={session_id}", status_code=302)
+
+        # Simple search results
+        results = []
+        if q:
+            # Mock search results based on query
+            all_content = [
+                {"title": "Understanding Behavioral Bot Detection", "url": "/blog/1", "description": "How mouse movements and keystroke dynamics reveal bots."},
+                {"title": "The Rise of AI Scrapers", "url": "/blog/2", "description": "Detecting LLM-powered crawling systems."},
+                {"title": "Decoy Networks", "url": "/blog/3", "description": "Fighting bots with fake data."},
+                {"title": "Proof-of-Work for Humans", "url": "/blog/4", "description": "Making bot computation expensive."},
+                {"title": "Professional Plan", "url": "/products", "description": "Advanced behavioral analysis and API access."},
+                {"title": "Enterprise Plan", "url": "/products", "description": "Maximum protection with custom ML models."},
+                {"title": "About SinkHole", "url": "/about", "description": "Next-generation bot detection platform."},
+                {"title": "Contact Us", "url": "/contact", "description": "Get in touch with our team."},
+            ]
+            q_lower = q.lower()
+            results = [r for r in all_content if q_lower in r["title"].lower() or q_lower in r["description"].lower()]
+
+        page = render_search_page(session_id=session_id, query=q, results=results)
+        response = HTMLResponse(page)
+        response.headers["x-botwall-decision"] = decision
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    # ── API Endpoints ──────────────────────────────────────────────────────────
+
+    @app.post("/api/contact")
+    async def api_contact(request: Request) -> JSONResponse:
+        """Contact form submission with honeypot bot detection."""
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+
+        # Honeypot detection - if 'website' field is filled, it's a bot
+        honeypot = data.get("website", "").strip()
+        if honeypot:
+            session_id = _get_session_id(request, cfg)
+            client_ip = _client_ip(request)
+            ip_hash = hash_client_ip(client_ip, cfg.secret_key)
+            session = store.store.load_session(session_id, ip_hash)
+            session["score"] = min(float(session.get("score", 0.0)), cfg.decoy_threshold - 20.0)
+            session.setdefault("reasons", []).append("honeypot:contact_form")
+            _record_decision(session, "decoy", ["honeypot:contact_form"])
+            store.store.save_session(session)
+            return JSONResponse({"ok": False, "error": "Bot detected"}, status_code=403)
+
+        # Normal form processing
+        name = data.get("name", "").strip()
+        email = data.get("email", "").strip()
+        message = data.get("message", "").strip()
+
+        if not name or not email or not message:
+            return JSONResponse({"ok": False, "error": "Missing required fields"}, status_code=400)
+
+        # In a real app, send email or save to database
+        # For demo, just return success
+        return JSONResponse({"ok": True, "message": "Message received (demo mode)"})
+
+    @app.get("/api/products")
+    async def api_products() -> JSONResponse:
+        """Get products list as JSON API."""
+        products = [
+            {"id": "starter", "name": "Starter", "price": "$29/mo", "description": "Perfect for small websites", "features": ["1,000 verified sessions", "Basic bot detection", "Email support"]},
+            {"id": "professional", "name": "Professional", "price": "$99/mo", "description": "For growing businesses", "features": ["10,000 verified sessions", "Advanced behavioral analysis", "Priority support", "API access"]},
+            {"id": "enterprise", "name": "Enterprise", "price": "$499/mo", "description": "Maximum protection", "features": ["Unlimited sessions", "Custom ML models", "24/7 phone support", "SLA guarantee", "On-premise option"]},
+        ]
+        return JSONResponse({"ok": True, "products": products})
+
+    @app.get("/api/search")
+    async def api_search(q: str = "") -> JSONResponse:
+        """Search API returning JSON results."""
+        if not q:
+            return JSONResponse({"ok": True, "query": "", "results": []})
+
+        all_content = [
+            {"title": "Understanding Behavioral Bot Detection", "url": "/blog/1", "type": "blog", "snippet": "How mouse movements and keystroke dynamics reveal bots."},
+            {"title": "The Rise of AI Scrapers", "url": "/blog/2", "type": "blog", "snippet": "Detecting LLM-powered crawling systems."},
+            {"title": "Decoy Networks", "url": "/blog/3", "type": "blog", "snippet": "Fighting bots with fake data."},
+            {"title": "Proof-of-Work for Humans", "url": "/blog/4", "type": "blog", "snippet": "Making bot computation expensive."},
+            {"title": "Telemetry and Threat Intelligence", "url": "/blog/5", "type": "blog", "snippet": "How we track bot fingerprints."},
+            {"title": "Professional Plan", "url": "/products", "type": "product", "snippet": "Advanced behavioral analysis and API access."},
+            {"title": "Enterprise Plan", "url": "/products", "type": "product", "snippet": "Maximum protection with custom ML models."},
+        ]
+        q_lower = q.lower()
+        results = [r for r in all_content if q_lower in r["title"].lower() or q_lower in r["snippet"].lower()]
+        return JSONResponse({"ok": True, "query": q, "count": len(results), "results": results})
+
+    # ── Test Suite & Development Routes ────────────────────────────────────────
+
+    @app.get("/bw/test-suite")
+    async def bw_test_suite(request: Request) -> HTMLResponse:
+        """Test suite dashboard for running bot/human simulations."""
+        session_id = _get_session_id(request, cfg)
+        suite = create_demo_test_suite()
+        website = suite.websites[0] if suite.websites else None
+        scenarios = suite.generate_default_scenarios()
+        response = HTMLResponse(render_test_suite_page(
+            session_id=session_id,
+            website=website,
+            scenarios=scenarios,
+        ))
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/bw/test-suite/config")
+    async def bw_test_suite_config() -> JSONResponse:
+        """Get default test suite configuration."""
+        config = TestWebsiteConfig(
+            name="Demo Test Site",
+            pages=7,
+            has_forms=True,
+            has_search=True,
+            protection_level="maximum",
+            include_honeypots=True,
+            include_timing_traps=True,
+        )
+        return JSONResponse(config.__dict__)
+
+    @app.post("/bw/test-suite/build")
+    async def bw_test_suite_build(request: Request) -> JSONResponse:
+        """Build a test website with specified configuration."""
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            data = {}
+
+        config = TestWebsiteConfig(
+            name=data.get("name", "Test Site"),
+            pages=data.get("pages", 5),
+            has_forms=data.get("has_forms", True),
+            has_search=data.get("has_search", True),
+            protection_level=data.get("protection_level", "standard"),
+            include_honeypots=data.get("include_honeypots", True),
+            include_timing_traps=data.get("include_timing_traps", True),
+        )
+
+        builder = TestWebsiteBuilder(config)
+        website = builder.build()
+
+        return JSONResponse({
+            "ok": True,
+            "website": website,
+        })
+
+    @app.post("/bw/test-suite/simulate")
+    async def bw_test_suite_simulate(request: Request) -> JSONResponse:
+        """Run a behavior simulation and return results."""
+        body = await request.body()
+        try:
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except json.JSONDecodeError:
+            data = {}
+
+        behavior_type = data.get("behavior_type", "human")
+        simulator = BehaviorSimulator()
+
+        # Generate simulated data based on behavior type
+        results = {
+            "behavior_type": behavior_type,
+            "mouse_path": [],
+            "keystrokes": [],
+            "scroll_events": [],
+            "dwell_ms": 0,
+        }
+
+        if behavior_type == "human":
+            # Human-like mouse path
+            start = (100.0, 100.0)
+            end = (500.0, 400.0)
+            results["mouse_path"] = [
+                {"x": p["x"], "y": p["y"], "t": p["t"]}
+                for p in simulator.simulate_human_mouse_path(start, end)
+            ]
+            # Human-like keystrokes
+            text = "Hello, this is a test message."
+            results["keystrokes"] = [
+                {"char": k["char"], "press_time": k["press_time"], "release_time": k["release_time"], "dwell": k["dwell"]}
+                for k in simulator.simulate_human_keystrokes(text)
+            ]
+            # Human-like scroll
+            results["scroll_events"] = [
+                {"y": s["y"], "t": s["t"], "delta": s["delta"]}
+                for s in simulator.simulate_human_scroll()
+            ]
+            results["dwell_ms"] = random.randint(3000, 8000)
+
+        elif behavior_type == "bot_basic":
+            # Bot-like mouse path
+            start = (100.0, 100.0)
+            end = (500.0, 400.0)
+            results["mouse_path"] = [
+                {"x": p["x"], "y": p["y"], "t": p["t"]}
+                for p in simulator.simulate_bot_mouse_path(start, end)
+            ]
+            # Bot-like keystrokes
+            text = "Hello bot message here."
+            results["keystrokes"] = [
+                {"char": k["char"], "press_time": k["press_time"], "release_time": k["release_time"], "dwell": k["dwell"]}
+                for k in simulator.simulate_bot_keystrokes(text)
+            ]
+            # Bot-like scroll (instant)
+            results["scroll_events"] = [
+                {"y": s["y"], "t": s["t"], "delta": s["delta"]}
+                for s in simulator.simulate_bot_scroll()
+            ]
+            results["dwell_ms"] = random.randint(200, 500)
+
+        return JSONResponse({
+            "ok": True,
+            "simulation": results,
+        })
+
+    @app.get("/bw/test-suite/behavior-types")
+    async def bw_test_suite_behavior_types() -> JSONResponse:
+        """List available behavior simulation types."""
+        return JSONResponse({
+            "types": [
+                {
+                    "id": "human",
+                    "name": "Human User",
+                    "description": "Natural mouse curves, variable keystroke timing, realistic scroll patterns",
+                },
+                {
+                    "id": "bot_basic",
+                    "name": "Basic Bot",
+                    "description": "Straight mouse lines, instant keystrokes, instant scroll jumps",
+                },
+                {
+                    "id": "bot_advanced",
+                    "name": "Advanced Bot",
+                    "description": "Simulated mouse movement with constant velocity",
+                },
+            ]
+        })
+
+    # ── Enhanced Telemetry Routes ────────────────────────────────────────────
+
+    @app.get("/bw/telemetry/v2")
+    async def bw_telemetry_v2(request: Request) -> HTMLResponse:
+        """Enhanced telemetry console with Phase 2 behavioral data."""
+        session_id = _get_session_id(request, cfg)
+        snapshot = _build_enhanced_telemetry_snapshot(store)
+        response = HTMLResponse(render_enhanced_telemetry_page(snapshot))
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/bw/telemetry/sessions/{session_id}/behavioral")
+    async def bw_session_behavioral(session_id: str) -> JSONResponse:
+        """Get detailed behavioral analysis for a specific session."""
+        sessions = store.store.list_sessions(limit=500)
+        session = next((s for s in sessions if s.get("session_id") == session_id), None)
+
+        if not session:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        # Extract Phase 2 data from events
+        phase2_analysis = {
+            "mouse_patterns": [],
+            "keystroke_dynamics": [],
+            "scroll_patterns": [],
+            "engagement_metrics": [],
+            "trap_interactions": [],
+            "risk_flags": [],
+        }
+
+        events = session.get("events", [])
+        for event in events:
+            phase2_data = event.get("phase2_data")
+            if phase2_data:
+                if phase2_data.get("mouse_teleport_count", 0) > 0:
+                    phase2_analysis["risk_flags"].append("MOUSE_TELEPORT")
+                if phase2_data.get("instant_scroll_detected"):
+                    phase2_analysis["risk_flags"].append("INSTANT_SCROLL")
+                if phase2_data.get("likely_copy_paste"):
+                    phase2_analysis["risk_flags"].append("COPY_PASTE")
+
+        return JSONResponse({
+            "session_id": session_id,
+            "score": session.get("score", 0.0),
+            "events_count": len(events),
+            "phase2_analysis": phase2_analysis,
+        })
+
+    @app.get("/bw/telemetry/attack-patterns")
+    async def bw_attack_patterns() -> JSONResponse:
+        """Detect and report attack patterns across sessions."""
+        sessions = store.store.list_sessions(limit=500)
+        telemetry = store.store.list_telemetry(limit=200)
+
+        patterns = {
+            "mouse_teleport_bots": 0,
+            "instant_scrollers": 0,
+            "honeypot_hits": 0,
+            "timing_trap_triggers": 0,
+            "robotic_typing": 0,
+            "suspicious_fingerprints": 0,
+        }
+
+        for s in sessions:
+            events = s.get("events", [])
+            for e in events:
+                p2 = e.get("phase2_data", {})
+                if p2.get("mouse_teleport_count", 0) > 0:
+                    patterns["mouse_teleport_bots"] += 1
+                if p2.get("instant_scroll_detected"):
+                    patterns["instant_scrollers"] += 1
+                if p2.get("honeypot_hits"):
+                    patterns["honeypot_hits"] += len(p2["honeypot_hits"])
+
+        for t in telemetry:
+            if t.get("suspicion", 0) > 20:
+                patterns["suspicious_fingerprints"] += 1
+
+        return JSONResponse({
+            "patterns": patterns,
+            "total_sessions_analyzed": len(sessions),
+            "high_risk_sessions": sum(1 for s in sessions if s.get("score", 0) < -50),
+        })
+
+    @app.get("/bw/stage2")
+    async def bw_stage2_dashboard(request: Request) -> HTMLResponse:
+        """Comprehensive Stage 2 behavioral analysis dashboard."""
+        session_id = _get_session_id(request, cfg)
+        snapshot = _build_enhanced_telemetry_snapshot(store)
+        # Add phase2_analysis for the dashboard
+        snapshot["phase2_analysis"] = {}
+        response = HTMLResponse(render_enhanced_telemetry_page(snapshot))
         _attach_cookie(response, cfg, session_id)
         return response
 
