@@ -15,7 +15,10 @@ from .crypto import TokenError, hash_client_ip, now_ts, sign_json, verify_json
 from .decoy import build_node
 from .embeddings_content import generate_fake_decoy_content, FakeContentConfig
 from .embeddings_renderer import render_embeddings_decoy_page
-from .enhanced_decoy import build_embeddings_node
+from .enhanced_decoy import build_embeddings_node, build_hybrid_node, EnhancedDecoyNode
+from .extrapolation_engine import extrapolate_poisoned_content, ExtrapolationConfig
+from .extrapolation_renderer import render_extrapolated_decoy_page, render_regeneration_status_page
+from .regeneration_scheduler import get_scheduler, get_decoy_node, get_scheduler_metrics
 from .html import (
     render_about_page,
     render_behavioral_challenge_page,
@@ -496,6 +499,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     cfg = settings or load_settings()
     store = init_store(cfg.redis_enabled, cfg.redis_url)
     peer_secrets = parse_peer_secrets(cfg.peer_secrets_raw or os.getenv("BOTWALL_PEER_SECRETS"))
+    
+    # Initialize background regeneration scheduler (zero-latency decoy content refresh)
+    regeneration_scheduler = get_scheduler(
+        interval_seconds=180.0,  # 3 minutes
+        num_decoy_nodes=cfg.decoy_max_nodes,
+    )
+    
+    # Start scheduler in background (non-blocking)
+    import asyncio
+    asyncio.create_task(regeneration_scheduler.start())
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -1115,19 +1128,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/content/archive/{node_id}")
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
-        # Use embeddings-based content generator for sophisticated fake content
-        node = build_embeddings_node(
-            session_id,
-            node_id % cfg.decoy_max_nodes,
-            max_nodes=cfg.decoy_max_nodes,
-            min_links=cfg.decoy_min_links,
-            max_links=cfg.decoy_max_links,
-            coherence_level=0.9,  # High grammatical coherence
-            falsehood_density=0.4,  # 40% facts are wrong
-            human_markers=True,  # Show human-detectable markers
-        )
-        response = HTMLResponse(render_embeddings_decoy_page(node=node, session_id=session_id))
+        
+        # Use zero-latency regeneration scheduler for extrapolated decoy content
+        # This content is derived from real page content but falsified with:
+        # - Entity substitutions (real names → similar fake names)
+        # - Date shifting (±2 years)
+        # - Number perturbation (±25%)
+        # - Quote misattribution
+        # - Citation fabrication
+        node_data = get_decoy_node(node_id % cfg.decoy_max_nodes)
+        
+        if node_data is None:
+            # Fallback: generate on-demand if scheduler hasn't populated yet
+            node = build_embeddings_node(
+                session_id,
+                node_id % cfg.decoy_max_nodes,
+                max_nodes=cfg.decoy_max_nodes,
+                min_links=cfg.decoy_min_links,
+                max_links=cfg.decoy_max_links,
+                coherence_level=0.9,
+                falsehood_density=0.4,
+                human_markers=True,
+            )
+            response = HTMLResponse(render_embeddings_decoy_page(node=node, session_id=session_id))
+        else:
+            # Use pre-generated extrapolated content (zero latency)
+            response = HTMLResponse(render_extrapolated_decoy_page(
+                node_data=node_data,
+                session_id=session_id,
+                show_markers=True,
+            ))
+        
+        response.headers["x-botwall-decision"] = "decoy"
         response.headers["x-robots-tag"] = "noindex, noarchive, nofollow"
+        _attach_cookie(response, cfg, session_id)
+        return response
+
+    @app.get("/bw/regeneration/status")
+    async def bw_regeneration_status(request: Request) -> HTMLResponse:
+        """Status page for decoy content regeneration system."""
+        session_id = _get_session_id(request, cfg)
+        metrics = get_scheduler_metrics()
+        response = HTMLResponse(render_regeneration_status_page(metrics))
         _attach_cookie(response, cfg, session_id)
         return response
 
