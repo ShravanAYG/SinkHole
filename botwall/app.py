@@ -503,7 +503,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ua = request.headers.get("user-agent", "")
         
         # Simple hardcoded rules
-        BOT_UA_KEYWORDS = ["bot", "crawler", "spider", "Claude-User", "Googlebot", "firecrawl", "crawl4ai"]
+        BOT_UA_KEYWORDS = ["bot", "crawler", "spider", "Claude-User", "Googlebot", "firecrawl", "crawl4ai", "scrapy", "crawl"]
+        HEADLESS_MARKERS = ["headless", "selenium", "webdriver", "puppeteer", "playwright", "cdp_", "automation"]
         DATACENTER_PREFIXES = ["34.", "195.64.", "113.30.", "110.225."]
         
         # Classification
@@ -517,7 +518,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Firefox with realistic version (rv:XXX.0 pattern)
             ("firefox/" in ua_lower and "rv:" in ua_lower and "gecko/" in ua_lower)
             or
-            # Chrome with realistic version (Chrome/XXX.0.0.0 pattern)
+            # Chrome with realistic version (Chrome/XXX.0.0.0 pattern, 100+)
             (re.search(r'Chrome/\d{3,4}\.0\.\d+\.\d+', ua) is not None)
             or
             # Safari
@@ -527,17 +528,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("edg/" in ua_lower and re.search(r'Edg/\d{3}', ua) is not None)
         )
         
+        # Check for headless/automation markers (strong bot signal)
+        has_headless = any(marker in ua_lower for marker in HEADLESS_MARKERS)
+        
         # Check UA keywords for obvious bots
         if any(kw.lower() in ua_lower for kw in BOT_UA_KEYWORDS):
             is_bot = True
             reason = "bot_ua"
-        # Check ancient Chrome versions (bots often use old Chrome strings)
-        elif re.search(r'Chrome/[1-9]\b|Chrome/1[0-4]\b', ua):
+        # Check headless/automation markers
+        elif has_headless:
+            is_bot = True
+            reason = "headless_marker"
+        # Check ancient Chrome versions (bots often use old Chrome strings like Chrome/14)
+        # Firecrawler uses ancient Chrome versions
+        elif re.search(r'Chrome/\d{1,2}\.0', ua) and not re.search(r'Chrome/\d{3,4}\.0', ua):
             is_bot = True
             reason = "ancient_chrome"
         # Check datacenter IPs BUT allow real browsers through
         elif any(client_ip.startswith(p) for p in DATACENTER_PREFIXES):
-            if is_real_browser:
+            if is_real_browser and not has_headless:
                 # Real browser from datacenter = allow through (could be VPN/proxy)
                 is_bot = False
             else:
