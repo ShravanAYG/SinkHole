@@ -108,7 +108,7 @@ section("SCENARIO 1-4: Bot / Scraper probes (pre-gate decoy)")
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "curl/7.81.0"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/decoy/" in loc,
+    status == 302 and "/content/archive/" in loc,
     "1. curl bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
@@ -117,7 +117,7 @@ check(
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "Wget/1.21.1"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/decoy/" in loc,
+    status == 302 and "/content/archive/" in loc,
     "2. wget bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
@@ -126,7 +126,7 @@ check(
 status, hdrs, body = req("GET", "/", headers={"User-Agent": "python-requests/2.31.0"})
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/decoy/" in loc,
+    status == 302 and "/content/archive/" in loc,
     "3. python-requests bot → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
@@ -138,7 +138,7 @@ status, hdrs, body = req("GET", "/", headers={
 })
 loc = hdrs.get("location", hdrs.get("Location", ""))
 check(
-    status == 302 and "/bw/decoy/" in loc,
+    status == 302 and "/content/archive/" in loc,
     "4. HeadlessChrome + bad IP → redirected to decoy",
     f"HTTP {status}  Location: {loc}",
 )
@@ -257,11 +257,9 @@ if has_challenge:
         "X-Forwarded-For": "10.0.0.1",
         "Cookie": f"bw_sid={session_id}; bw_gate={gate_cookie}",
     })
-    decision_hdr = hdrs_h.get("x-botwall-decision", hdrs_h.get("X-Botwall-Decision", ""))
     check(
         status_h == 200 and decision_hdr in ("observe", "allow"),
         "9. Home page served to verified session (Stage 1 passed)",
-        f"HTTP {status_h}  x-botwall-decision={decision_hdr}",
     )
 
 
@@ -335,7 +333,6 @@ if gate_cookie:
                 "Accept-Language": "en",
                 "Cookie": f"bw_sid={burst_session}; bw_gate={bot_gate}",
             })
-            last_decision = h_b.get("x-botwall-decision", h_b.get("X-Botwall-Decision", ""))
             last_location = h_b.get("location", h_b.get("Location", ""))
 
         routed_to_decoy = "/bw/decoy" in last_location or last_decision == "decoy"
@@ -353,23 +350,21 @@ if gate_cookie:
 # ═══════════════════════════════════════════════════════════════════════════
 section("SCENARIO 11: Layer 2 Decoy graph")
 
-status_d, hdrs_d, body_d = req("GET", "/bw/decoy/0", headers={
+status_d, hdrs_d, body_d = req("GET", "/content/archive/0", headers={
     "User-Agent": "Mozilla/5.0 Chrome/120",
 })
 has_relational = any(w in body_d for w in ["brother", "sibling", "lineage", "ledger", "VERIFY-AUTH"])
 has_noindex   = "noindex" in body_d.lower()
-has_bw_hdr   = hdrs_d.get("x-botwall-decision", hdrs_d.get("X-Botwall-Decision", "")) == "decoy"
 
 check(status_d == 200, "11a. Decoy page accessible (HTTP 200)", f"HTTP {status_d}")
 check(has_relational, "11b. Decoy page contains relational contradiction content",
       f"Sample: {body_d[body_d.find('brother')-20:body_d.find('brother')+50]}" if "brother" in body_d else "No relational text found")
 check(has_noindex,   "11c. Decoy page has noindex meta tag", "")
-check(has_bw_hdr,   "11d. Decoy page sets X-Botwall-Decision: decoy header", f"header={hdrs_d.get('x-botwall-decision', '')}")
 
 # Multiple nodes
 nodes_ok = 0
 for n in [1, 7, 23, 47, 79]:
-    s_n, _, b_n = req("GET", f"/bw/decoy/{n}", headers={"User-Agent": "Mozilla/5.0"})
+    s_n, _, b_n = req("GET", f"/content/archive/{n}", headers={"User-Agent": "Mozilla/5.0"})
     if s_n == 200 and "Archive Segment" in b_n:
         nodes_ok += 1
 check(nodes_ok == 5, f"11e. All tested decoy nodes (1,7,23,47,79) return content", f"{nodes_ok}/5 nodes OK")
