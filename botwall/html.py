@@ -2480,20 +2480,525 @@ def render_recovery_page(session_id: str) -> str:
 
 
 def render_dashboard(data: dict[str, Any]) -> str:
-    pretty = html.escape(json.dumps(data, indent=2, sort_keys=True))
+    """Beautiful comprehensive dashboard with navigation and behavior analysis."""
+    metrics = data.get("metrics", {})
+    sessions = data.get("sessions", [])
+    
+    m_sessions = int(metrics.get("sessions_total", 0))
+    m_gate = int(metrics.get("gate_passed", 0))
+    m_decoy = int(metrics.get("decoy_sessions", 0))
+    m_allow = int(metrics.get("allow_sessions", 0))
+    m_avg = float(metrics.get("avg_score", 0.0))
+    
+    # Calculate bot detection rate
+    detection_rate = (m_decoy / m_sessions * 100) if m_sessions > 0 else 0
+    
+    # Recent bot detections
+    recent_bots = []
+    for s in sessions[:10]:
+        history = s.get("decision_history", [])
+        if history and history[-1].get("decision") == "decoy":
+            reasons = history[-1].get("reasons", [])
+            recent_bots.append({
+                "sid": str(s.get("session_id", ""))[:12],
+                "ip": str(s.get("client_ip", "-")),
+                "reasons": reasons[:2] if reasons else ["bot_detected"],
+                "time": int(history[-1].get("at", 0))
+            })
+    
+    bot_rows = ""
+    for b in recent_bots[:5]:
+        reason_tags = "".join([f'<span class="tag tag-risk">{html.escape(r)}</span>' for r in b["reasons"]])
+        bot_rows += f'<tr><td class="font-mono">{b["sid"]}</td><td>{b["ip"]}</td><td>{reason_tags}</td></tr>'
+    
+    if not bot_rows:
+        bot_rows = '<tr><td colspan="3" class="text-muted">No recent bot detections</td></tr>'
+    
     return f"""<!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Botwall Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SinkHole Botwall Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 1rem; }}
-    pre {{ background: #111; color: #ddd; padding: 1rem; border-radius: 8px; overflow: auto; }}
+    :root {{
+      --bg: #0a0c10;
+      --surface: #151821;
+      --surface-2: #1c1f2a;
+      --surface-3: #242838;
+      --border: #2d3142;
+      --text: #e6e8ef;
+      --muted: #8b92a8;
+      --accent: #00d4aa;
+      --accent-2: #00b4d8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --risk: #ef4444;
+      --gradient-1: linear-gradient(135deg, #00d4aa 0%, #00b4d8 100%);
+      --gradient-2: linear-gradient(135deg, #ef4444 0%, #f59e0b 100%);
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }}
+    
+    /* Navigation */
+    .nav {{
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }}
+    .nav-inner {{
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+    }}
+    .logo {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 1.25rem;
+      color: var(--accent);
+    }}
+    .logo-icon {{
+      width: 36px;
+      height: 36px;
+      background: var(--gradient-1);
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      font-size: 1.1rem;
+    }}
+    .nav-links {{
+      display: flex;
+      gap: 8px;
+    }}
+    .nav-link {{
+      padding: 8px 16px;
+      border-radius: 8px;
+      text-decoration: none;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: all 0.2s;
+    }}
+    .nav-link:hover, .nav-link.active {{
+      color: var(--text);
+      background: var(--surface-2);
+    }}
+    .nav-link.active {{
+      color: var(--accent);
+    }}
+    
+    /* Main Content */
+    .main {{
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+    }}
+    
+    /* Header */
+    .header {{
+      margin-bottom: 2rem;
+    }}
+    .header h1 {{
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }}
+    .header p {{
+      color: var(--muted);
+      font-size: 1rem;
+    }}
+    .status-badge {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--ok);
+      margin-left: 1rem;
+    }}
+    .status-badge::before {{
+      content: "";
+      width: 8px;
+      height: 8px;
+      background: var(--ok);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }}
+    @keyframes pulse {{
+      0%, 100% {{ opacity: 1; }}
+      50% {{ opacity: 0.5; }}
+    }}
+    
+    /* KPI Grid */
+    .kpi-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }}
+    .kpi-card {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.5rem;
+      transition: transform 0.2s, border-color 0.2s;
+    }}
+    .kpi-card:hover {{
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }}
+    .kpi-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }}
+    .kpi-label {{
+      font-size: 0.875rem;
+      color: var(--muted);
+      font-weight: 500;
+    }}
+    .kpi-icon {{
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      font-size: 1.25rem;
+    }}
+    .kpi-icon.green {{ background: rgba(34, 197, 94, 0.1); }}
+    .kpi-icon.red {{ background: rgba(239, 68, 68, 0.1); }}
+    .kpi-icon.blue {{ background: rgba(0, 180, 216, 0.1); }}
+    .kpi-icon.yellow {{ background: rgba(245, 158, 11, 0.1); }}
+    .kpi-value {{
+      font-size: 2.25rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }}
+    .kpi-value.accent {{ color: var(--accent); }}
+    .kpi-value.ok {{ color: var(--ok); }}
+    .kpi-value.risk {{ color: var(--risk); }}
+    .kpi-value.warn {{ color: var(--warn); }}
+    .kpi-delta {{
+      font-size: 0.8rem;
+      color: var(--muted);
+    }}
+    
+    /* Content Grid */
+    .content-grid {{
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1.5rem;
+    }}
+    
+    /* Cards */
+    .card {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }}
+    .card-header {{
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }}
+    .card-title {{
+      font-size: 1rem;
+      font-weight: 600;
+    }}
+    .card-body {{
+      padding: 1.25rem 1.5rem;
+    }}
+    
+    /* Tables */
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }}
+    th, td {{
+      padding: 0.875rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }}
+    th {{
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }}
+    tr:last-child td {{
+      border-bottom: none;
+    }}
+    
+    /* Tags */
+    .tag {{
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin: 2px;
+    }}
+    .tag-ok {{
+      background: rgba(34, 197, 94, 0.1);
+      color: var(--ok);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+    }}
+    .tag-risk {{
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--risk);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }}
+    .tag-warn {{
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--warn);
+      border: 1px solid rgba(245, 158, 11, 0.2);
+    }}
+    
+    /* Behavior Analysis Section */
+    .behavior-section {{
+      margin-top: 2rem;
+    }}
+    .behavior-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }}
+    .behavior-item {{
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      text-align: center;
+    }}
+    .behavior-value {{
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }}
+    .behavior-label {{
+      font-size: 0.8rem;
+      color: var(--muted);
+    }}
+    
+    /* Font utilities */
+    .font-mono {{ font-family: "SF Mono", Monaco, monospace; }}
+    .text-muted {{ color: var(--muted); }}
+    .text-center {{ text-align: center; }}
+    
+    /* Responsive */
+    @media (max-width: 1024px) {{
+      .content-grid {{ grid-template-columns: 1fr; }}
+      .behavior-grid {{ grid-template-columns: repeat(2, 1fr); }}
+    }}
+    @media (max-width: 640px) {{
+      .nav-links {{ display: none; }}
+      .main {{ padding: 1rem; }}
+      .kpi-grid {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>
-  <h1>Botwall Dashboard</h1>
-  <pre>{pretty}</pre>
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <div class="logo">
+        <div class="logo-icon">🛡️</div>
+        <span>SinkHole</span>
+      </div>
+      <div class="nav-links">
+        <a href="/" class="nav-link">Home</a>
+        <a href="/dashboard" class="nav-link active">Dashboard</a>
+        <a href="/bw/telemetry" class="nav-link">Telemetry</a>
+        <a href="/bw/config" class="nav-link">Config</a>
+        <a href="/health" class="nav-link">Health</a>
+      </div>
+    </div>
+  </nav>
+  
+  <!-- Main Content -->
+  <main class="main">
+    <div class="header">
+      <h1>
+        Botwall Dashboard
+        <span class="status-badge">Stage 1 DISABLED</span>
+      </h1>
+      <p>Real-time bot detection and behavior analysis monitoring</p>
+    </div>
+    
+    <!-- KPI Cards -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Total Sessions</span>
+          <div class="kpi-icon blue">👥</div>
+        </div>
+        <div class="kpi-value accent">{m_sessions}</div>
+        <div class="kpi-delta">Active sessions tracked</div>
+      </div>
+      
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Bot Detections</span>
+          <div class="kpi-icon red">🤖</div>
+        </div>
+        <div class="kpi-value risk">{m_decoy}</div>
+        <div class="kpi-delta">{detection_rate:.1f}% detection rate</div>
+      </div>
+      
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Humans Allowed</span>
+          <div class="kpi-icon green">✅</div>
+        </div>
+        <div class="kpi-value ok">{m_allow}</div>
+        <div class="kpi-delta">Legitimate traffic</div>
+      </div>
+      
+      <div class="kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Avg Score</span>
+          <div class="kpi-icon yellow">📊</div>
+        </div>
+        <div class="kpi-value warn">{m_avg:.1f}</div>
+        <div class="kpi-delta">Session trust score</div>
+      </div>
+    </div>
+    
+    <!-- Content Grid -->
+    <div class="content-grid">
+      <!-- Recent Bot Detections -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🚫 Recent Bot Detections</span>
+          <span class="tag tag-risk">Live</span>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <table>
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>IP Address</th>
+                <th>Detection Reasons</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bot_rows}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <!-- System Status -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">⚙️ System Status</span>
+        </div>
+        <div class="card-body">
+          <div style="display: flex; flex-direction: column; gap: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="text-muted">Stage 1 Gate</span>
+              <span class="tag tag-warn">DISABLED</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="text-muted">Stage 2 Behavior</span>
+              <span class="tag tag-ok">ACTIVE</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="text-muted">Decoy System</span>
+              <span class="tag tag-ok">ACTIVE</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="text-muted">Telemetry</span>
+              <span class="tag tag-ok">ENABLED</span>
+            </div>
+            <div style="margin-top: 0.5rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+              <p class="text-muted" style="font-size: 0.8rem; line-height: 1.5;">
+                Bots are detected via User-Agent analysis, behavior scoring, and fingerprinting. 
+                Detected bots are redirected to poisoned decoy content.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Behavior Analysis -->
+    <div class="behavior-section">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🔍 Behavior Analysis Metrics</span>
+          <span class="text-muted">Stage 2 Detection Signals</span>
+        </div>
+        <div class="card-body">
+          <div class="behavior-grid">
+            <div class="behavior-item">
+              <div class="behavior-value">UA</div>
+              <div class="behavior-label">User-Agent Analysis</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">🖱️</div>
+              <div class="behavior-label">Mouse Pattern Detection</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">⌨️</div>
+              <div class="behavior-label">Keystroke Dynamics</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">⚡</div>
+              <div class="behavior-label">Timing Analysis</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">🎭</div>
+              <div class="behavior-label">Honeypot Interactions</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">🔐</div>
+              <div class="behavior-label">Browser Fingerprinting</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Quick Links -->
+    <div style="margin-top: 2rem; display: flex; gap: 1rem; flex-wrap: wrap;">
+      <a href="/bw/telemetry" style="padding: 12px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 500; transition: all 0.2s;">
+        📡 View Full Telemetry
+      </a>
+      <a href="/bw/config" style="padding: 12px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 500; transition: all 0.2s;">
+        ⚙️ Configuration
+      </a>
+      <a href="/health" style="padding: 12px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--text); text-decoration: none; font-weight: 500; transition: all 0.2s;">
+        🏥 Health Check
+      </a>
+    </div>
+  </main>
 </body>
 </html>"""
 

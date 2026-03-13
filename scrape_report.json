@@ -1,0 +1,173 @@
+{
+  "bot_report": {
+    "total_pages": 20,
+    "pages_by_decision": {
+      "decoy": 20
+    },
+    "average_score": 0,
+    "detection_rate": 1.0,
+    "details": [
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/49?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/47?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/28?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/37?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/67?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/52?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/39?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/31?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/75?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/13?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/32?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/8?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/56?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/29?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/73?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/16?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/57?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/33?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      },
+      {
+        "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/bw/decoy/23?sid=04389690ff914f73854970f11430b0c5",
+        "status": 200,
+        "decision": "decoy",
+        "score": null,
+        "reasons": []
+      }
+    ]
+  },
+  "human_results": [
+    {
+      "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/",
+      "decision": null,
+      "score": null
+    },
+    {
+      "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/about",
+      "decision": null,
+      "score": null
+    },
+    {
+      "url": "https://0b01-2401-4900-63f5-543b-bc94-6713-772a-34d2.ngrok-free.app/products",
+      "decision": null,
+      "score": null
+    }
+  ],
+  "summary": {
+    "bot_detection_working": true,
+    "human_traffic_allowed": true
+  }
+}

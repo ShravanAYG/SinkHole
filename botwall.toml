@@ -20,7 +20,8 @@ port = 4000
 session_cookie = "bw_sid"
 
 # Gate token cookie (placed after Stage 1 PoW is solved).
-gate_cookie = "bw_gate"
+# Set to empty string to DISABLE Stage 1 gate (allow all traffic through)
+gate_cookie = ""
 
 [secrets]
 # CHANGE THESE IN PRODUCTION — never commit real keys here.
