@@ -269,6 +269,7 @@ def decide(
     request_count = len(session.get("request_times", []))
     proof_valid = int(session.get("proof_valid", 0))
     challenges = int(session.get("challenge_issued", 0))
+    gate_passed = bool(session.get("js_verification_passed") or session.get("gate_passed_at"))
     seq_q = sequence_quality(session, sequence_window)
 
     reasons: list[str] = [f"sequence_quality:{seq_q:.1f}"]
@@ -278,6 +279,15 @@ def decide(
         return "decoy", reasons
 
     if proof_valid == 0:
+        # Gate-verified users: they passed JS PoW + env checks, treat as semi-trusted.
+        # Only send to decoy if score is truly bad; never re-challenge.
+        if gate_passed:
+            if score <= -50:
+                reasons.append("decision:decoy_post_gate_low_score")
+                return "decoy", reasons
+            reasons.append("decision:observe_gate_passed")
+            return "observe", reasons
+
         if request_count <= 1 and score > observe_threshold:
             reasons.append("decision:observe_first_touch")
             return "observe", reasons
