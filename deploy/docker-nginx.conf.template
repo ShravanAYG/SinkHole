@@ -2,10 +2,18 @@ server {
     listen 80;
     server_name _;  # Accept any domain name
 
+    # Docker internal DNS — resolves container names at request time
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    
+    # Store proxy endpoints in variables so Nginx doesn't crash on startup 
+    # if the upstream containers aren't perfectly ready yet.
+    set $botwall_backend ${BOTWALL_URL};
+    set $origin_backend ${UPSTREAM_URL};
+
     # ── Internal: Bot detection check ─────────────────────────────────────
     location = /__bw_check {
         internal;
-        proxy_pass ${BOTWALL_URL}/bw/check;
+        proxy_pass $botwall_backend/bw/check?path=$request_uri;
         proxy_pass_request_body off;
         proxy_set_header Content-Length "";
         proxy_method GET;
@@ -19,7 +27,7 @@ server {
 
     # ── SinkHole internal endpoints (SDK, beacons, gate) ──────────────────
     location ~ ^/(bw/|api/v1/analytics-ping|cdn-ping/perf|event/flow) {
-        proxy_pass ${BOTWALL_URL};
+        proxy_pass $botwall_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
@@ -28,7 +36,7 @@ server {
     # WordPress/any site loads 20+ CSS/JS/image files per page.
     # Without this bypass, burst detection flags legitimate browsers as bots.
     location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff2?|ttf|eot|otf|webp|avif|mp4|webm|pdf|map)$ {
-        proxy_pass ${UPSTREAM_URL};
+        proxy_pass $origin_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
@@ -46,7 +54,7 @@ server {
         error_page 403 = @botwall_poison;
 
         # Clean traffic → forward to the real website
-        proxy_pass ${UPSTREAM_URL};
+        proxy_pass $origin_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
@@ -60,7 +68,7 @@ server {
     # Bots see "/products" in their URL bar, but get poisoned content.
     # This makes it undetectable — the bot thinks it's scraping real pages.
     location @botwall_poison {
-        proxy_pass ${BOTWALL_URL}/bw/poison?original_path=$request_uri;
+        proxy_pass $botwall_backend/bw/poison?original_path=$request_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Original-URI $request_uri;
@@ -70,7 +78,7 @@ server {
 
     # ── Legacy decoy endpoint (direct access) ────────────────────────────
     location ~ ^/content/archive/ {
-        proxy_pass ${BOTWALL_URL};
+        proxy_pass $botwall_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Cookie $http_cookie;
