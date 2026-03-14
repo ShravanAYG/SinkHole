@@ -12,6 +12,7 @@ import hashlib
 import html
 import re
 import time
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin
@@ -88,6 +89,7 @@ class ContentHarvester:
         self._model: Any = None
         self._lock = asyncio.Lock()
         self._discovered_paths: set[str] = set()
+        self.logger = logging.getLogger("sinkhole.harvester")
         
         # Seed paths — will be expanded by auto-discovery from the real site
         self.harvest_paths = ["/"]
@@ -101,15 +103,20 @@ class ContentHarvester:
     
     async def harvest_all(self) -> SemanticCache:
         """Harvest all configured pages and build semantic cache."""
+        self.logger.info(f"Starting harvest for base_url={self.base_url}")
         async with aiohttp.ClientSession() as session:
             # Step 1: Crawl the homepage first and discover links
             homepage_node = await self._harvest_page(session, "/")
             if isinstance(homepage_node, ContentNode):
+                self.logger.info("Homepage harvested, discovering links...")
                 # Discover internal links from the homepage HTML
                 await self._discover_links(session, "/")
+            else:
+                self.logger.error("Failed to harvest homepage!")
             
             # Step 2: Crawl all discovered paths
             all_paths = list(set(self.harvest_paths) | self._discovered_paths)
+            self.logger.info(f"Crawling {len(all_paths)} paths: {all_paths}")
             tasks = [self._harvest_page(session, path) for path in all_paths]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -117,6 +124,10 @@ class ContentHarvester:
             for result in results:
                 if isinstance(result, ContentNode):
                     new_nodes[result.url] = result
+                elif isinstance(result, Exception):
+                    self.logger.error(f"Error harvesting path: {result}")
+            
+            self.logger.info(f"Harvest complete. Acquired {len(new_nodes)} valid nodes.")
             
             # Build indices
             topics_index: dict[str, list[str]] = {}
@@ -183,13 +194,17 @@ class ContentHarvester:
         """Harvest a single page."""
         url = urljoin(self.base_url, path)
         try:
+            self.logger.debug(f"Harvesting page: {url}")
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
                 if response.status != 200:
+                    self.logger.warning(f"Harvest failed for {url} with status {response.status}")
                     return None
                 html_text = await response.text()
-                return self._parse_page(url, html_text)
+                node = self._parse_page(url, html_text)
+                self.logger.debug(f"Successfully harvested node: {node.title} with {len(node.sections)} sections")
+                return node
         except Exception as e:
-            # Silently fail - we'll retry next cycle
+            self.logger.error(f"Harvest exception for {url}: {e}")
             return None
     
     def _parse_page(self, url: str, html_text: str) -> ContentNode:
