@@ -41,11 +41,15 @@ def score_request(
     ip_reputation = (meta.get("ip_reputation") or "unknown").lower()
     ja3 = (meta.get("ja3") or "").strip()
     path = (meta.get("path") or "").lower()
+    request_path = (meta.get("request_path") or "").lower()
 
     reasons: list[str] = []
     delta = 0.0
 
     # Skip scoring for internal/asset requests to avoid burst penalties on page load.
+    if request_path.startswith("/bw/"):
+        return ScoreOutcome(delta=0.0, reasons=[])
+
     if path:
         path_only = path.split("?", 1)[0]
         if path_only.startswith(("/bw/", "/__dashboard", "/telemetry/", "/cdn-ping", "/event/")):
@@ -63,6 +67,10 @@ def score_request(
 
     hard_bot_markers = ["curl", "wget", "python-requests", "python-urllib", "httpx", "aiohttp", "go-http-client", "libwww-perl", "scrapy", "headless"]
     bot_markers = ["puppeteer", "playwright", "selenium", "phantomjs"]
+    # Track whether UA already looks like a bot before applying header penalties,
+    # so that missing Accept-Language alone doesn't penalise privacy-mode browsers.
+    ua_looks_like_bot = any(marker in ua for marker in hard_bot_markers) or any(marker in ua for marker in bot_markers)
+
     if any(marker in ua for marker in hard_bot_markers):
         delta += weights.ua_bot_marker * 2
         reasons.append("request:hard_bot_ua_marker")
@@ -74,8 +82,13 @@ def score_request(
         reasons.append("request:browser_like_ua")
 
     if not accept_lang:
-        delta += weights.missing_accept_lang
-        reasons.append("request:missing_accept_language")
+        # Only penalise when at least one other bot signal already exists.
+        # Missing Accept-Language alone is common in legitimate API clients,
+        # privacy-hardened browsers, and certain mobile WebViews.
+        if ua_looks_like_bot or ip_reputation == "bad":
+            delta += weights.missing_accept_lang
+            reasons.append("request:missing_accept_language")
+        # else: neutral — we don't reward it but we don't penalise either
     else:
         delta += 2
 
@@ -296,6 +309,11 @@ def decide(
     reasons: list[str] = [f"sequence_quality:{seq_q:.1f}"]
 
     if score <= decoy_threshold:
+        # Gate-passed sessions with no behavioral events shouldn't be hard-decoyed
+        # based solely on request-level scoring (e.g., asset/auth_request bursts).
+        if gate_passed and len(session.get("events", [])) == 0 and proof_valid == 0:
+            reasons.append("decision:observe_gate_no_events")
+            return "observe", reasons
         reasons.append("decision:hard_decoy_threshold")
         return "decoy", reasons
 

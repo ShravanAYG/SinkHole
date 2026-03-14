@@ -133,6 +133,7 @@ def _request_meta(request: Request, path: str | None = None) -> dict[str, str]:
         "ip_reputation": request.headers.get("x-ip-reputation", "unknown"),
         "ja3": request.headers.get("x-ja3", ""),
         "path": path or request.url.path,
+        "request_path": request.url.path,
     }
 
 
@@ -170,49 +171,54 @@ def _explicit_scraper_reasons(request: Request) -> list[str]:
         "smartproxy",
     ]
     
-    # Check for header anomalies that indicate automation
-    # Real browsers send detailed Accept headers
-    accept_suspicious = accept in {"", "*/*", "text/html", "text/html, */*"}
-    
+    # Check for header anomalies that indicate automation.
+    # Only flag "*/*" or empty Accept as suspicious — "text/html" alone is sent
+    # by many legitimate non-browser clients (RSS readers, link previewers, etc.)
+    accept_suspicious = accept in {"", "*/*"}
+
     # Check for missing or generic headers that browsers always send
-    dnt = request.headers.get("dnt")  # Do Not Track
     sec_fetch_site = request.headers.get("sec-fetch-site")
     sec_fetch_mode = request.headers.get("sec-fetch-mode")
-    
-    # Missing Sec-Fetch-* headers is a strong automation signal (modern browsers always send these)
+
+    # Missing Sec-Fetch-* is a bot signal, but CDN edge nodes and some proxies
+    # strip these headers from otherwise legitimate requests.  Treat it as a
+    # supporting signal only — never as the sole reason for a block.
     missing_sec_fetch = not sec_fetch_site and not sec_fetch_mode
-    
-    # Check encoding preferences - real browsers always accept compressed responses
+
+    # Check encoding preferences — real browsers always accept compressed responses.
     accept_encoding = request.headers.get("accept-encoding", "")
-    no_compression = not accept_encoding or "identity" in accept_encoding
-    
+    no_compression = not accept_encoding or accept_encoding.strip() == "identity"
+
     reasons: list[str] = []
-    
+    soft_signals: list[str] = []  # Signals that only matter alongside hard evidence
+
     # Check for explicit scraper markers in User-Agent
     for marker in advanced_markers:
         if marker in ua:
             reasons.append(f"pregate:explicit_scraper_ua:{marker}")
             break
-    
+
     # Check for Firecrawl-specific patterns in other headers
-    # Firecrawl sometimes uses specific proxy headers
     via_header = request.headers.get("via", "").lower()
     if "firecrawl" in via_header or "crawl" in via_header:
         reasons.append("pregate:via_header_crawler")
-    
-    # Check for proxy service headers
+
+    # Multiple hops in X-Forwarded-For often indicates scraping-service proxy chains.
+    # Require ≥3 hops (2 commas) to avoid flagging simple CDN+origin setups.
     forwarded_for = request.headers.get("x-forwarded-for", "")
-    if forwarded_for:
-        # Multiple IPs in X-Forwarded-For often indicates proxy chaining (common in scraping services)
-        if forwarded_for.count(",") >= 2:
-            reasons.append("pregate:proxy_chain_detected")
-    
-    # CF-Connecting-IP or similar CDN headers without proper browser signals
+    if forwarded_for and forwarded_for.count(",") >= 2:
+        reasons.append("pregate:proxy_chain_detected")
+
+    # CF-Connecting-IP without Sec-Fetch-* is suspicious only in combination with
+    # other signals — add it as a soft signal, not a standalone block.
     cf_ip = request.headers.get("cf-connecting-ip")
     if cf_ip and missing_sec_fetch:
-        reasons.append("pregate:cdn_ip_without_browser_signals")
-    
-    # If we've found scraper markers, add supporting evidence
+        soft_signals.append("pregate:cdn_ip_without_browser_signals")
+
+    # Collect supporting evidence.  These are added only when at least one hard
+    # reason already exists, preventing single-signal false positives on legitimate
+    # traffic that simply lacks certain optional headers (e.g. privacy-focused
+    # browsers, corporate proxies, older Safari versions).
     if reasons:
         if not accept_language:
             reasons.append("pregate:missing_accept_language")
@@ -224,7 +230,29 @@ def _explicit_scraper_reasons(request: Request) -> list[str]:
             reasons.append("pregate:missing_sec_fetch_headers")
         if no_compression:
             reasons.append("pregate:no_compression_support")
-            
+        reasons.extend(soft_signals)
+    else:
+        # No hard UA/header reason found.  Still block if ≥3 soft/supporting
+        # signals coincide — that combination is highly unlikely for a real browser.
+        soft_count = 0
+        if not accept_language:
+            soft_signals.append("pregate:missing_accept_language")
+            soft_count += 1
+        if accept_suspicious:
+            soft_signals.append("pregate:generic_accept_header")
+            soft_count += 1
+        if ip_reputation == "bad":
+            soft_signals.append("pregate:ip_reputation_bad")
+            soft_count += 1
+        if missing_sec_fetch:
+            soft_signals.append("pregate:missing_sec_fetch_headers")
+            soft_count += 1
+        if no_compression:
+            soft_signals.append("pregate:no_compression_support")
+            soft_count += 1
+        if soft_count >= 3:
+            reasons.extend(soft_signals)
+
     return reasons
 
 
@@ -534,7 +562,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ua = request.headers.get("user-agent", "")
         
         # Simple hardcoded rules
-        BOT_UA_KEYWORDS = ["bot", "crawler", "spider", "Claude-User", "Googlebot", "firecrawl", "crawl4ai", "scrapy", "crawl"]
+        # "crawl" removed as bare substring — it matches "crawl4ai"/"crawler" already
+        # via the more specific entries and would catch unrelated words in real UAs.
+        BOT_UA_KEYWORDS = ["bot", "crawler", "spider", "Claude-User", "Googlebot", "firecrawl", "crawl4ai", "scrapy"]
         HEADLESS_MARKERS = ["headless", "selenium", "webdriver", "puppeteer", "playwright", "cdp_", "automation"]
         DATACENTER_PREFIXES = ["34.", "195.64.", "113.30.", "110.225."]
         
