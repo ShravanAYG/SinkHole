@@ -3,7 +3,7 @@ Background Regeneration System - Zero-latency decoy content refresh.
 
 Runs as a background async task that:
 1. Harvests real content every N minutes
-2. Regenerates falsified decoy content atomically
+2. Regenerates decoy content atomically
 3. Swaps decoy nodes without blocking requests
 4. Monitors performance and adjusts frequency
 """
@@ -227,7 +227,7 @@ class RegenerationScheduler:
             else:
                 seed_node = None
             
-            # Generate falsified content
+            # Generate content
             falsified = self.extrapolator.extrapolate_content(
                 seed_node=seed_node,
                 config=ExtrapolationConfig(
@@ -255,7 +255,7 @@ class RegenerationScheduler:
                 "links": links,
                 "source_nodes": falsified.source_nodes,
                 "confidence_score": falsified.confidence_score,
-                "falsification_map": falsified.falsification_map,
+                "transform_map": falsified.transform_map,
                 "generated_at": time.time(),
             }
         

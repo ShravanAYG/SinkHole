@@ -1205,38 +1205,139 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.api_route("/bw/poison", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     async def bw_poison(request: Request, original_path: str = "/") -> HTMLResponse:
         """
-        Transparent content poisoning endpoint.
+        Transparent decoy content endpoint.
         
         Called internally by Nginx when a bot is detected. The bot sees the
-        SAME URL it requested (e.g. /products, /about) but gets poisoned
-        content instead of the real page. This is undetectable by bots.
+        SAME URL it requested (e.g. /products, /about) but gets dynamically
+        generated content that matches the real site's design perfectly.
         
         The original_path query param tells us what URL the bot was trying
-        to access, so we can generate contextually appropriate fake content.
+        to access, so we can generate contextually appropriate content.
         """
         import logging
-        logger = logging.getLogger("sinkhole.poison")
+        import os
+        import httpx
+        from bs4 import BeautifulSoup, Tag, NavigableString
+        
+        logger = logging.getLogger("sinkhole.decoy")
         
         session_id = _get_session_id(request, cfg)
         client_ip = _client_ip(request)
         
-        # Use the original path to seed deterministic poisoned content
-        # so the same URL always returns the same fake page (caching-friendly)
+        # Use the original path to seed deterministic content
+        # so the same URL always returns the same page (caching-friendly)
         path_hash = hash(original_path) % cfg.decoy_max_nodes
         
         logger.warning(
-            f"POISON_SERVE ip={client_ip} original_path={original_path} "
+            f"DECOY_SERVE ip={client_ip} original_path={original_path} "
             f"node={path_hash} sid={session_id[:8]}"
         )
         
-        # Try pre-generated extrapolated content first (zero latency)
+        # Get pre-generated decoy content
         node_data = get_decoy_node(path_hash)
         
-        if node_data is not None:
+        # Try to fetch the upstream page's HTML template
+        upstream_url = os.environ.get("UPSTREAM_URL", "")
+        template_html = None
+        
+        if upstream_url:
+            try:
+                target_url = f"{upstream_url.rstrip('/')}{original_path}"
+                async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+                    resp = await client.get(target_url)
+                    if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", ""):
+                        template_html = resp.text
+            except Exception:
+                pass  # Fall back to static renderer
+        
+        if template_html and node_data:
+            # === Dynamic injection: use the real site's shell ===
+            soup = BeautifulSoup(template_html, "html.parser")
+            
+            # Find the main content container
+            content_container = (
+                soup.find("main")
+                or soup.find("article")
+                or soup.find("div", {"id": "content"})
+                or soup.find("div", {"class": "entry-content"})
+                or soup.find("div", {"id": "primary"})
+                or soup.find("div", {"class": "site-content"})
+            )
+            
+            if content_container and isinstance(content_container, Tag):
+                # CRITICAL: Clear ALL original content (0% leakage)
+                content_container.clear()
+                
+                # Inject the generated decoy content
+                title_tag = soup.new_tag("h1")
+                title_tag.string = node_data.get("title", "")
+                content_container.append(title_tag)
+                
+                summary = node_data.get("summary", "")
+                if summary:
+                    p_tag = soup.new_tag("p")
+                    p_tag["style"] = "color: #666; font-style: italic; margin-bottom: 1.5em;"
+                    p_tag.string = summary
+                    content_container.append(p_tag)
+                
+                for section in node_data.get("sections", []):
+                    heading = section.get("heading", "")
+                    body = section.get("body", "")
+                    level = min(section.get("level", 2), 6)
+                    
+                    if heading:
+                        h_tag = soup.new_tag(f"h{level}")
+                        h_tag.string = heading
+                        content_container.append(h_tag)
+                    
+                    for paragraph in body.split("\n"):
+                        paragraph = paragraph.strip()
+                        if paragraph:
+                            p_tag = soup.new_tag("p")
+                            p_tag.string = paragraph
+                            content_container.append(p_tag)
+                
+                # Inject related links
+                links = node_data.get("links", [])
+                if links:
+                    nav_div = soup.new_tag("div")
+                    nav_div["style"] = "margin-top: 2em; padding-top: 1em; border-top: 1px solid #ddd;"
+                    h3 = soup.new_tag("h3")
+                    h3.string = "Related Articles"
+                    nav_div.append(h3)
+                    ul = soup.new_tag("ul")
+                    for child_id in links:
+                        li = soup.new_tag("li")
+                        a = soup.new_tag("a", href=f"/content/archive/{child_id}")
+                        a.string = f"Article {child_id:03d}"
+                        li.append(a)
+                        ul.append(li)
+                    nav_div.append(ul)
+                    content_container.append(nav_div)
+                
+                # Update the page title to match injected content
+                title_el = soup.find("title")
+                if title_el:
+                    title_el.string = node_data.get("title", "")
+                
+                # Remove any meta description that references real content
+                meta_desc = soup.find("meta", attrs={"name": "description"})
+                if meta_desc and isinstance(meta_desc, Tag):
+                    meta_desc["content"] = summary
+                
+                response = HTMLResponse(str(soup))
+            else:
+                # Container not found — fall back to static renderer
+                response = HTMLResponse(render_extrapolated_decoy_page(
+                    node_data=node_data,
+                    session_id=session_id,
+                    show_markers=False,
+                ))
+        elif node_data is not None:
             response = HTMLResponse(render_extrapolated_decoy_page(
                 node_data=node_data,
                 session_id=session_id,
-                show_markers=False,  # No markers — bot must not know it's fake
+                show_markers=False,
             ))
         else:
             # Fallback: generate on-demand with path-seeded content
@@ -1246,15 +1347,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 max_nodes=cfg.decoy_max_nodes,
                 min_links=cfg.decoy_min_links,
                 max_links=cfg.decoy_max_links,
-                coherence_level=0.95,      # High coherence — must look real
-                falsehood_density=0.5,     # Half the facts are wrong
-                human_markers=False,       # No markers for bots
+                coherence_level=0.95,
+                falsehood_density=0.5,
+                human_markers=False,
             )
             response = HTMLResponse(render_embeddings_decoy_page(
                 node=node, session_id=session_id
             ))
         
-        # Return 200 OK — absolutely no headers that reveal this is fake
+        # Return 200 OK — no headers that reveal anything
         response.status_code = 200
         _attach_cookie(response, cfg, session_id)
         return response

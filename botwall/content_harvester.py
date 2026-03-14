@@ -2,7 +2,7 @@
 Real Content Harvester - Extracts and caches legitimate website content.
 
 This module periodically scrapes real pages to build a semantic cache
-that serves as the foundation for falsified decoy content generation.
+that serves as the foundation for decoy content generation.
 """
 
 from __future__ import annotations

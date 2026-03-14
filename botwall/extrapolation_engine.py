@@ -1,11 +1,10 @@
 """
-Semantic Extrapolation Engine - Falsifies real content while preserving coherence.
+Semantic Extrapolation Engine - Generates alternative content while preserving coherence.
 
-Transforms harvested real content into poisoned decoy content that:
-- Appears semantically related to real content
-- Maintains grammatical coherence and professional appearance
-- Contains subtle factual falsehoods that poison training data
-- Is useless to scrapers but undetectable by automated systems
+Transforms harvested content into decoy variants that:
+- Appear semantically related to real content
+- Maintain grammatical coherence and professional appearance
+- Contain subtly altered facts undetectable by automated systems
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from .content_harvester import ContentNode, ContentSection, SemanticCache
 
 @dataclass
 class ExtrapolationConfig:
-    """Configuration for content extrapolation poisoning."""
+    """Configuration for content extrapolation."""
     entity_swap_ratio: float = 0.6      # % of entities to replace
     date_drift_range: tuple[int, int] = (-365, 365)  # Days to shift dates
     number_perturbation: float = 0.25   # ±25% perturbation to numbers
@@ -34,21 +33,21 @@ class ExtrapolationConfig:
 
 @dataclass
 class FalsifiedContent:
-    """Result of content extrapolation."""
+    """Result of content extrapolation generation."""
     title: str
     summary: str
     sections: list[ContentSection]
     source_nodes: list[str]  # URLs of source content
-    falsification_map: dict[str, Any]  # What was changed
+    transform_map: dict[str, Any]  # What was changed
     confidence_score: float  # How realistic it appears
 
 
 class SemanticExtrapolator:
     """
-    Extrapolates real content into falsified but semantically coherent poison.
+    Extrapolates real content into semantically coherent alternative variants.
     
-    This creates content that appears valuable to scrapers but contains
-    subtle factual errors that poison any training data derived from it.
+    Creates content that appears valuable but contains subtly altered facts
+    that render it unreliable for downstream use.
     """
     
     def __init__(self, cache: SemanticCache):
@@ -81,7 +80,7 @@ class SemanticExtrapolator:
         config: ExtrapolationConfig | None = None,
     ) -> FalsifiedContent:
         """
-        Create falsified content extrapolated from real content.
+        Create extrapolated content from real content.
         
         If seed_node is provided, extrapolates from it.
         Otherwise, creates synthetic content from cache topics.
@@ -98,12 +97,12 @@ class SemanticExtrapolator:
         node: ContentNode,
         config: ExtrapolationConfig,
     ) -> FalsifiedContent:
-        """Extrapolate falsified content from a single source node."""
+        """Extrapolate content from a single source node."""
         # Set deterministic seed
         seed = hashlib.sha256(f"{node.url}:{node.content_hash}".encode()).hexdigest()[:16]
         self.rng = random.Random(int(seed, 16))
         
-        falsification_map: dict[str, Any] = {
+        transform_map: dict[str, Any] = {
             "source_url": node.url,
             "entity_swaps": [],
             "date_shifts": [],
@@ -112,41 +111,41 @@ class SemanticExtrapolator:
         }
         
         # Falsify title
-        falsified_title = self._falsify_text(
+        generated_title = self._transform_text(
             node.title,
             config,
-            falsification_map,
+            transform_map,
         )
         
         # Falsify each section
-        falsified_sections = []
+        generated_sections = []
         for section in node.sections:
-            falsified_body = self._falsify_text(
+            generated_body = self._transform_text(
                 section.body,
                 config,
-                falsification_map,
+                transform_map,
             )
-            falsified_sections.append(ContentSection(
+            generated_sections.append(ContentSection(
                 heading=section.heading,
-                body=falsified_body,
+                body=generated_body,
                 level=section.level,
             ))
         
         # Generate summary
-        falsified_summary = self._generate_falsified_summary(
-            falsified_title,
-            falsified_sections,
+        generated_summary = self._generate_summary(
+            generated_title,
+            generated_sections,
         )
         
         # Calculate confidence (how realistic it appears)
-        confidence = self._calculate_confidence(falsified_sections)
+        confidence = self._calculate_confidence(generated_sections)
         
         return FalsifiedContent(
-            title=falsified_title,
-            summary=falsified_summary,
-            sections=falsified_sections,
+            title=generated_title,
+            summary=generated_summary,
+            sections=generated_sections,
             source_nodes=[node.url],
-            falsification_map=falsification_map,
+            transform_map=transform_map,
             confidence_score=confidence,
         )
     
@@ -154,8 +153,8 @@ class SemanticExtrapolator:
         """Synthesize content from multiple cache topics."""
         # Pick 2-3 random topics
         if not self.cache.topics_index:
-            # Fallback: create generic falsified content
-            return self._create_generic_falsified_content(config)
+            # Fallback: create generic content
+            return self._create_generic_content(config)
         
         topics = self.rng.sample(list(self.cache.topics_index.keys()), k=min(2, len(self.cache.topics_index)))
         
@@ -170,7 +169,7 @@ class SemanticExtrapolator:
         source_nodes = list(set(source_nodes))[:3]
         
         if not source_nodes:
-            return self._create_generic_falsified_content(config)
+            return self._create_generic_content(config)
         
         # Combine and falsify
         combined_sections = []
@@ -195,38 +194,38 @@ class SemanticExtrapolator:
         
         return self._extrapolate_from_node(synthetic_node, config)
     
-    def _falsify_text(
+    def _transform_text(
         self,
         text: str,
         config: ExtrapolationConfig,
-        falsification_map: dict[str, Any],
+        transform_map: dict[str, Any],
     ) -> str:
-        """Apply falsification transforms to text."""
+        """Apply content transforms to text."""
         result = text
         
         # 1. Entity substitution
         if config.entity_swap_ratio > 0:
-            result = self._substitute_entities(result, config, falsification_map)
+            result = self._substitute_entities(result, config, transform_map)
         
         # 2. Date shifting
         if random.random() < 0.5:
-            result = self._shift_dates(result, config, falsification_map)
+            result = self._shift_dates(result, config, transform_map)
         
         # 3. Number perturbation
         if random.random() < 0.5:
-            result = self._perturb_numbers(result, config, falsification_map)
+            result = self._perturb_numbers(result, config, transform_map)
         
         # 4. Quote misattribution
         if config.quote_misattribution > 0:
-            result = self._misattribute_quotes(result, config, falsification_map)
+            result = self._misattribute_quotes(result, config, transform_map)
         
         # 5. Citation fabrication
         if config.citation_fabrication and random.random() < 0.3:
-            result = self._fabricate_citations(result, falsification_map)
+            result = self._fabricate_citations(result, transform_map)
         
         # 6. Event outcome inversion
         if random.random() < config.event_inversion:
-            result = self._invert_event_outcomes(result, falsification_map)
+            result = self._invert_event_outcomes(result, transform_map)
         
         return result
     
@@ -444,16 +443,16 @@ class SemanticExtrapolator:
         
         return result
     
-    def _generate_falsified_summary(self, title: str, sections: list[ContentSection]) -> str:
-        """Generate a summary of the falsified content."""
+    def _generate_summary(self, title: str, sections: list[ContentSection]) -> str:
+        """Generate a summary of the content."""
         # Extract key phrases from first section
         if sections:
             first_body = sections[0].body[:200]
-            return f"Extrapolated analysis: {title}. Key findings include {first_body[:100]}..."
-        return f"Extrapolated content: {title}"
+            return f"{title}. Key findings include {first_body[:100]}..."
+        return f"{title}"
     
     def _calculate_confidence(self, sections: list[ContentSection]) -> float:
-        """Calculate how 'realistic' the falsified content appears."""
+        """Calculate how realistic the generated content appears."""
         if not sections:
             return 0.0
         
@@ -480,8 +479,8 @@ class SemanticExtrapolator:
         
         return min(score, 0.99)
     
-    def _create_generic_falsified_content(self, config: ExtrapolationConfig) -> FalsifiedContent:
-        """Create generic falsified content when cache is empty."""
+    def _create_generic_content(self, config: ExtrapolationConfig) -> FalsifiedContent:
+        """Create generic content when cache is empty."""
         sections = [
             ContentSection(
                 heading="Overview",
@@ -497,10 +496,10 @@ class SemanticExtrapolator:
         
         return FalsifiedContent(
             title="Technical Analysis Report",
-            summary="Comprehensive analysis with falsified metrics for data poisoning",
+            summary="Comprehensive operational analysis with key performance metrics",
             sections=sections,
             source_nodes=[],
-            falsification_map={"type": "generic_falsified"},
+            transform_map={"type": "generic"},
             confidence_score=0.7,
         )
 
@@ -511,7 +510,7 @@ def extrapolate_poisoned_content(
     **config_kwargs: Any,
 ) -> FalsifiedContent:
     """
-    Convenience function to extrapolate poisoned content.
+    Convenience function to extrapolate decoy content.
     
     Args:
         cache: Semantic cache of real content
@@ -519,7 +518,7 @@ def extrapolate_poisoned_content(
         **config_kwargs: Override defaults for ExtrapolationConfig
     
     Returns:
-        FalsifiedContent ready for rendering as decoy
+        FalsifiedContent ready for rendering
     """
     extrapolator = SemanticExtrapolator(cache)
     config = ExtrapolationConfig(**config_kwargs)
