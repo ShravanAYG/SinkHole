@@ -1,54 +1,72 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# SinkHole — Use with ANY website
+# SinkHole + WordPress Demo
 #
-# Just change UPSTREAM_URL to your website and run:
+# Protects a WordPress site with bot detection + content poisoning.
+#
+# Deploy:
 #   docker compose up -d --build
 #
-# Examples:
-#   UPSTREAM_URL=http://my-node-app:3000     (Node.js)
-#   UPSTREAM_URL=http://my-php-app:80        (PHP / Apache)
-#   UPSTREAM_URL=http://my-nextjs-app:3000   (Next.js)
-#   UPSTREAM_URL=https://my-website.com      (External URL)
+# Stop:
+#   docker compose down
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
+  # ── SinkHole: Bot detection gateway (port 80) ─────────────────────────────
   sinkhole:
     build: .
     ports:
       - "80:80"
     environment:
-      # ┌──────────────────────────────────────────────────────────────────┐
-      # │  UPSTREAM_URL — The website you want to protect                 │
-      # │  Point this at your web app's Docker container or external URL  │
-      # └──────────────────────────────────────────────────────────────────┘
-      - UPSTREAM_URL=http://host.docker.internal:3000
-
-      # ── Security keys (CHANGE IN PRODUCTION!) ──
-      - BOTWALL_SECRET_KEY=change-me-to-a-strong-random-key
-      - BOTWALL_TELEMETRY_SECRET=change-me-key-for-cluster-sync
-
-      # ── Optional: Redis for multi-instance deployments ──
-      # - BOTWALL_REDIS_ENABLED=1
-      # - BOTWALL_REDIS_URL=redis://redis:6379/0
+      - UPSTREAM_URL=http://wp:80
+      - BOTWALL_SECRET_KEY=${BOTWALL_SECRET_KEY:-change-me-in-production}
+      - BOTWALL_TELEMETRY_SECRET=${BOTWALL_TELEMETRY_SECRET:-change-me-in-production}
+      - BOTWALL_POW_DIFFICULTY=2
+      - BOTWALL_POW_ELEVATED_DIFFICULTY=3
+    depends_on:
+      wp:
+        condition: service_started
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
       interval: 30s
       timeout: 5s
       start_period: 15s
       retries: 3
-    restart: unless-stopped
+    networks:
+      - sinknet
 
-# ─────────────────────────────────────────────────────────────────────────────
-# To protect a Docker-based website running on the same network:
-#
-#   services:
-#     sinkhole:
-#       ...
-#       environment:
-#         - UPSTREAM_URL=http://my-app:3000
-#
-#     my-app:
-#       image: my-website:latest
-#       expose:
-#         - "3000"
-# ─────────────────────────────────────────────────────────────────────────────
+  # ── WordPress: Demo website ───────────────────────────────────────────────
+  wp:
+    image: wordpress:latest
+    environment:
+      - WORDPRESS_DB_HOST=wp-db
+      - WORDPRESS_DB_USER=wp
+      - WORDPRESS_DB_PASSWORD=wp
+      - WORDPRESS_DB_NAME=wp
+    depends_on:
+      wp-db:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - sinknet
+
+  # ── MariaDB: WordPress database ──────────────────────────────────────────
+  wp-db:
+    image: mariadb:lts
+    environment:
+      - MARIADB_DATABASE=wp
+      - MARIADB_USER=wp
+      - MARIADB_PASSWORD=wp
+      - MARIADB_RANDOM_ROOT_PASSWORD=1
+    volumes:
+      - wp-data:/var/lib/mysql
+    restart: unless-stopped
+    networks:
+      - sinknet
+
+volumes:
+  wp-data:
+
+networks:
+  sinknet:
+    driver: bridge
