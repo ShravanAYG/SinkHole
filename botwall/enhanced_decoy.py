@@ -71,7 +71,7 @@ def build_embeddings_node(
         node_id=node_id,
         coherence_level=config.coherence_level,
         falsehood_density=config.falsehood_density,
-        human_markers=config.human_detectable_markers,
+        human_detectable_markers=config.human_detectable_markers,
     )
     
     # Generate links
