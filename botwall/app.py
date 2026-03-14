@@ -570,9 +570,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         elif has_headless:
             is_bot = True
             reason = "headless_marker"
-        # Check ancient Chrome versions (bots often use old Chrome strings like Chrome/14)
-        # Firecrawler uses ancient Chrome versions
-        elif re.search(r'Chrome/\d{1,2}\.0', ua) and not re.search(r'Chrome/\d{3,4}\.0', ua):
+        # Check ancient Chrome versions (Chrome < 100)
+        # Note: We consider old Chrome versions (like Chrome/14) as bots
+        elif re.search(r'Chrome/(?:[1-4]?\d|50)\.0', ua) and not re.search(r'Chrome/\d{3,4}\.0', ua):
             is_bot = True
             reason = "ancient_chrome"
         # Check datacenter IPs BUT allow real browsers through

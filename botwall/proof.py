@@ -135,6 +135,12 @@ def score_gate_environment(report: Mapping[str, Any], request_user_agent: str | 
         hard_fail = True
         reasons.append("env:cdp_detected_hard_fail")
         return score, reasons, hard_fail
+        
+    # Webdriver detection
+    if report.get("webdriver"):
+        hard_fail = True
+        reasons.append("env:webdriver_true")
+        return score, reasons, hard_fail
     
     # Automation globals that stealth plugins sometimes miss
     js_globals = report.get("js_globals", [])

@@ -300,15 +300,6 @@ def decide(
         return "decoy", reasons
 
     if proof_valid == 0:
-        # Gate-verified users: they passed JS PoW + env checks, treat as semi-trusted.
-        # Only send to decoy if score is truly bad; never re-challenge.
-        if gate_passed:
-            if score <= -50:
-                reasons.append("decision:decoy_post_gate_low_score")
-                return "decoy", reasons
-            reasons.append("decision:observe_gate_passed")
-            return "observe", reasons
-
         if request_count <= 1 and score > observe_threshold:
             reasons.append("decision:observe_first_touch")
             return "observe", reasons

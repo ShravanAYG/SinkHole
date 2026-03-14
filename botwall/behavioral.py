@@ -37,7 +37,6 @@ class MousePatternAnalyzer:
         Calculate movement jaggedness (how "natural" the path is).
         Humans have slightly irregular, curved paths.
         Bots often have perfectly straight lines or overly smooth curves.
-        adadwdwdawd
         Returns 0.0 for perfectly straight lines, higher for jagged paths.
         """
         if len(points) < 3:
