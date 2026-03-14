@@ -966,6 +966,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def bw_check(request: Request) -> JSONResponse:
         fallback = request.query_params.get("path", "/")
         target_path = _canonical_target_path(request, fallback)
+
+        # ── Step 1: No gate cookie → 401 (triggers Nginx @botwall_gate) ──
+        gate_cookie = request.cookies.get(cfg.gate_cookie)
+        if not gate_cookie:
+            payload = CheckResponse(
+                session_id="",
+                decision="gate",
+                score=0.0,
+                reasons=["no_gate_cookie"],
+            )
+            response = JSONResponse(
+                payload.model_dump(mode="json"),
+                status_code=401,  # Nginx auth_request → @botwall_gate
+            )
+            response.headers["x-botwall-decision"] = "gate"
+            return response
+
+        # ── Step 2: Known scraper UA → 403 (triggers Nginx @botwall_poison)
         pre_gate_reasons = _explicit_scraper_reasons(request)
         if pre_gate_reasons:
             session_id = _get_session_id(request, cfg)
@@ -982,10 +1000,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 score=float(session.get("score", 0.0)),
                 reasons=pre_gate_reasons,
             )
-            response = JSONResponse(payload.model_dump(mode="json"))
+            response = JSONResponse(
+                payload.model_dump(mode="json"),
+                status_code=403,  # Nginx auth_request → @botwall_poison
+            )
+            response.headers["x-botwall-decision"] = "decoy"
             response.headers["x-botwall-score"] = f"{float(session.get('score', 0.0)):.2f}"
             _attach_cookie(response, cfg, session_id)
             return response
+
+        # ── Step 3: Evaluate session scoring ─────────────────────────────
         require_traversal = target_path.startswith("/content/")
         session, session_id, reasons, decision, _ = _evaluate_request(
             request=request,
@@ -1000,7 +1024,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             score=float(session.get("score", 0.0)),
             reasons=reasons,
         )
-        response = JSONResponse(payload.model_dump(mode="json"))
+
+        # Map decision to HTTP status for Nginx auth_request
+        if decision == "decoy":
+            status_code = 403  # → @botwall_poison
+        elif decision in ("challenge", "gate"):
+            status_code = 401  # → @botwall_gate
+        else:
+            status_code = 200  # → pass through to upstream
+
+        response = JSONResponse(
+            payload.model_dump(mode="json"),
+            status_code=status_code,
+        )
+        response.headers["x-botwall-decision"] = decision
         response.headers["x-botwall-score"] = f"{float(session.get('score', 0.0)):.2f}"
         _attach_cookie(response, cfg, session_id)
         return response
