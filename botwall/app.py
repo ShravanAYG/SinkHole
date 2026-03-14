@@ -1331,6 +1331,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 or soup.find("div", {"id": "content"})
                 or soup.find("div", {"id": "primary"})
                 or soup.find("div", {"class": "site-content"})
+                or soup.find("body")
             )
             
             if content_container and isinstance(content_container, Tag):

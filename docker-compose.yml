@@ -22,6 +22,7 @@ services:
       - BOTWALL_TELEMETRY_SECRET=${BOTWALL_TELEMETRY_SECRET:-change-me-in-production}
       - BOTWALL_POW_DIFFICULTY=2
       - BOTWALL_POW_ELEVATED_DIFFICULTY=3
+      - UPSTREAM_URL=http://origin:9000
     depends_on:
       wp:
         condition: service_started
