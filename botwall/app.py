@@ -962,7 +962,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def bw_sdk_js() -> Response:
         return Response(content=sdk_script(), media_type="application/javascript")
 
-    @app.get("/bw/check", response_model=CheckResponse)
+    @app.api_route("/bw/check", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], response_model=CheckResponse)
     async def bw_check(request: Request) -> JSONResponse:
         fallback = request.query_params.get("path", "/")
         target_path = _canonical_target_path(request, fallback)
