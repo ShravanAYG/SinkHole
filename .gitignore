@@ -58,3 +58,7 @@ logs/
 /tmp/
 *.tmp
 *.bak
+
+# ── Project-specific directories ─────────────────────────────────────────────
+.kiro/
+.demo-nginx/
