@@ -53,6 +53,12 @@ services:
       # - BOTWALL_REDIS_URL=redis://redis:6379/0
     expose:
       - "4000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     restart: unless-stopped
 
   # ── Origin: Your website ────────────────────────────────────────────────
