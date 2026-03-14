@@ -5,6 +5,9 @@ redis>=7.3.0
 httpx>=0.28.0
 pytest>=9.0.0
 
+
 # Content poisoning dependencies
 aiohttp>=3.9.0
 beautifulsoup4>=4.12.0
+transformers>=4.38.0
+torch>=2.2.0

@@ -1227,16 +1227,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             f"node={path_hash} sid={session_id[:8]}"
         )
         
-        # ── Step 1: ALWAYS generate fake content (no scheduler dependency) ──
-        node = build_embeddings_node(
-            session_id,
-            path_hash,
-            max_nodes=cfg.decoy_max_nodes,
-            min_links=cfg.decoy_min_links,
-            max_links=cfg.decoy_max_links,
-            coherence_level=0.4,
-            falsehood_density=1.0,
-            human_markers=True,
+        # ── Step 1: ALWAYS generate heavy technical garbage using ML Model ──
+        import uuid
+        import random
+        from dataclasses import dataclass
+        
+        @dataclass
+        class GarbageNode:
+            title: str
+            sections: list[dict]
+            children: list[int]
+            
+        # Lazy load the ML model to ensure fast processing
+        global _text_generator
+        try:
+            _text_generator
+        except NameError:
+            try:
+                from transformers import pipeline
+                logger.info("Loading distilgpt2 for heavy ML data poisoning...")
+                _text_generator = pipeline("text-generation", model="distilgpt2", device="cpu")
+            except Exception as e:
+                logger.error(f"Failed to load ML model: {e}")
+                _text_generator = None
+
+        sections = []
+        
+        if _text_generator:
+            prompts = [
+                "The system diagnostic returned a critical failure because",
+                "Financial reports for Q3 indicate a massive shift in",
+                "Memory allocation overflowed when the server attempted to",
+                "Quantum encryption keys were compromised due to",
+            ]
+            
+            rng = random.Random(session_id + str(path_hash))
+            for i in range(5): # Generate 5 paragraphs of heavy ML hallucinations
+                # Use greedy decoding for speed (do_sample=False or low top_k)
+                prompt = rng.choice(prompts)
+                try:
+                    out = _text_generator(prompt, max_new_tokens=50, num_return_sequences=1, do_sample=True, top_k=50)
+                    gen_text = out[0]["generated_text"]
+                except Exception:
+                    gen_text = f"Fallback error log [0x{rng.randint(0, 0xFFFFFF):06X}]"
+                    
+                sections.append({"heading": f"Analysis Extract {uuid.uuid4().hex[:8]}", "body": gen_text, "level": 2})
+        else:
+            # Fallback if transformers fails to load
+            sections.append({"heading": "Model Offline", "body": "The text generation ML model is currently offline.", "level": 2})
+
+        node = GarbageNode(
+            title=f"Synthetic Analysis {path_hash:04x}",
+            sections=sections,
+            children=[random.randint(1, cfg.decoy_max_nodes) for _ in range(5)]
         )
         
         # ── Step 2: Try to fetch the upstream page as a design template ─────
@@ -1337,14 +1380,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else:
                 # Container not found — fall back to standalone renderer
                 logger.warning("No content container found in upstream HTML, using standalone renderer")
-                response = HTMLResponse(render_embeddings_decoy_page(
-                    node=node, session_id=session_id, show_human_markers=True
-                ))
+                response = HTMLResponse(_render_garbage(node, session_id))
         else:
             # No upstream template available — use standalone renderer
-            response = HTMLResponse(render_embeddings_decoy_page(
-                node=node, session_id=session_id, show_human_markers=True
-            ))
+            response = HTMLResponse(_render_garbage(node, session_id))
         
         response.status_code = 200
         _attach_cookie(response, cfg, session_id)
@@ -2112,3 +2151,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
+
+def _render_garbage(node, session_id: str) -> str:
+    from html import escape
+    body_html = ""
+    for sec in node.sections:
+        body_html += f"<h2>{escape(sec['heading'])}</h2>"
+        body_html += f"<pre style='font-family:monospace;background:#eee;padding:1em;'>{escape(sec['body'])}</pre>"
+    body_html += "<h3>Related</h3><ul>"
+    for c in node.children:
+        body_html += f"<li><a href='/content/archive/{c}?ref={escape(session_id[:8])}'>Record {c:03d}</a></li>"
+    body_html += "</ul>"
+    body_html += f'<div style="text-align:center;margin-top:2rem;padding:1rem;"><a href="/bw/recovery?ref={escape(session_id[:8])}">Request human recovery</a></div>'
+    
+    return f"<!DOCTYPE html><html><head><title>{escape(node.title)}</title></head><body>{body_html}</body></html>"
