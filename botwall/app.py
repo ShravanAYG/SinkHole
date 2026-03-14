@@ -1164,7 +1164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _ = alias
         return await _ingest_beacon(request, payload)
 
-    @app.get("/content/archive/{node_id}")
+    @app.api_route("/content/archive/{node_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
         
