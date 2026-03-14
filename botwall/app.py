@@ -1227,10 +1227,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             f"node={path_hash} sid={session_id[:8]}"
         )
         
-        # ── Step 1: ALWAYS generate heavy technical garbage using ML Model ──
+        # ── Step 1: ALWAYS generate heavy technical garbage using Statistical ML (Markov Chain) ──
         import uuid
         import random
         from dataclasses import dataclass
+        import collections
         
         @dataclass
         class GarbageNode:
@@ -1238,48 +1239,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sections: list[dict]
             children: list[int]
             
+        # Lightweight, zero-dependency Statistical ML Model for fast text generation
+        # This replaces HuggingFace transformers (which ran out of space on AWS)
+        class MarkovChainGenerator:
+            def __init__(self, n_gram=2):
+                self.n_gram = n_gram
+                self.model = collections.defaultdict(list)
+                self.starts = []
+                # Train the model on some technical seed data
+                self._train_seed_corpus()
+
+            def _train_seed_corpus(self):
+                corpus = [
+                    "The system diagnostic returned a critical failure because memory allocation overflowed when the server attempted to initialize the kernel.",
+                    "Financial reports for Q3 indicate a massive shift in cryptographic hashing algorithms leading to unrecoverable blockchain forks.",
+                    "Memory allocation overflowed when the server attempted to parse the anomalous payload from the decentralized routing network.",
+                    "Quantum encryption keys were compromised due to temporal desynchronization in the secondary phase variance array.",
+                    "A critical buffer overflow was detected in the neural processing unit resulting in cascade failure across all connected subnets.",
+                    "Unauthorized execution of the binary protocol parser triggered a recursive memory leak in the core system daemon.",
+                    "The distributed graph database reported synchronization errors after the asymmetric encryption keys were rotated unexpectedly.",
+                    "Thermal throttling initiated because the graphics processing pipeline exceeded maximum thermodynamic constraints during render.",
+                ]
+                for text in corpus:
+                    words = text.split()
+                    if len(words) < self.n_gram:
+                        continue
+                    self.starts.append(tuple(words[:self.n_gram]))
+                    for i in range(len(words) - self.n_gram):
+                        state = tuple(words[i:i + self.n_gram])
+                        next_word = words[i + self.n_gram]
+                        self.model[state].append(next_word)
+                        
+            def generate(self, max_words=40, rng=None):
+                if not rng:
+                    rng = random
+                state = rng.choice(self.starts)
+                output = list(state)
+                for _ in range(max_words - self.n_gram):
+                    if state not in self.model or not self.model[state]:
+                        break
+                    next_word = rng.choice(self.model[state])
+                    output.append(next_word)
+                    state = tuple(output[-self.n_gram:])
+                return " ".join(output) + "."
+
         # Lazy load the ML model to ensure fast processing
         global _text_generator
         try:
             _text_generator
         except NameError:
-            try:
-                from transformers import pipeline
-                logger.info("Loading distilgpt2 for heavy ML data poisoning...")
-                _text_generator = pipeline("text-generation", model="distilgpt2", device="cpu")
-            except Exception as e:
-                logger.error(f"Failed to load ML model: {e}")
-                _text_generator = None
+            logger.info("Loading Statistical ML Model (Markov Chain) for fast data poisoning...")
+            _text_generator = MarkovChainGenerator(n_gram=2)
 
         sections = []
-        
-        if _text_generator:
-            prompts = [
-                "The system diagnostic returned a critical failure because",
-                "Financial reports for Q3 indicate a massive shift in",
-                "Memory allocation overflowed when the server attempted to",
-                "Quantum encryption keys were compromised due to",
-            ]
-            
-            rng = random.Random(session_id + str(path_hash))
-            for i in range(5): # Generate 5 paragraphs of heavy ML hallucinations
-                # Use greedy decoding for speed (do_sample=False or low top_k)
-                prompt = rng.choice(prompts)
-                try:
-                    out = _text_generator(prompt, max_new_tokens=50, num_return_sequences=1, do_sample=True, top_k=50)
-                    gen_text = out[0]["generated_text"]
-                except Exception:
-                    gen_text = f"Fallback error log [0x{rng.randint(0, 0xFFFFFF):06X}]"
-                    
-                sections.append({"heading": f"Analysis Extract {uuid.uuid4().hex[:8]}", "body": gen_text, "level": 2})
-        else:
-            # Fallback if transformers fails to load
-            sections.append({"heading": "Model Offline", "body": "The text generation ML model is currently offline.", "level": 2})
+        rng = random.Random(session_id + str(path_hash))
+
+        for i in range(5): # Generate 5 paragraphs of fast, dynamic ML hallucinations
+            gen_text = _text_generator.generate(max_words=rng.randint(25, 60), rng=rng)
+            sections.append({"heading": f"Analysis Extract {uuid.uuid4().hex[:8]}", "body": gen_text, "level": 2})
 
         node = GarbageNode(
             title=f"Synthetic Analysis {path_hash:04x}",
             sections=sections,
-            children=[random.randint(1, cfg.decoy_max_nodes) for _ in range(5)]
+            children=[rng.randint(1, cfg.decoy_max_nodes) for _ in range(5)]
         )
         
         # ── Step 2: Try to fetch the upstream page as a design template ─────
