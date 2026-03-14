@@ -76,20 +76,21 @@ class ContentHarvester:
             cls._instance._initialized = False
         return cls._instance
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = ""):
         if self._initialized:
             return
         self._initialized = True
         
-        self.base_url = base_url
+        import os
+        # Use UPSTREAM_URL from environment — this is the REAL website to harvest
+        self.base_url = base_url or os.environ.get("UPSTREAM_URL", "http://localhost:8000")
         self.cache = SemanticCache()
         self._model: Any = None
         self._lock = asyncio.Lock()
+        self._discovered_paths: set[str] = set()
         
-        # Pages to harvest
-        self.harvest_paths = [
-            "/", "/about", "/products", "/blog", "/contact", "/demo", "/wizard", "/gallery"
-        ]
+        # Seed paths — will be expanded by auto-discovery from the real site
+        self.harvest_paths = ["/"]
         
         # Initialize embedding model if available
         if HAS_EMBEDDINGS:
@@ -101,7 +102,15 @@ class ContentHarvester:
     async def harvest_all(self) -> SemanticCache:
         """Harvest all configured pages and build semantic cache."""
         async with aiohttp.ClientSession() as session:
-            tasks = [self._harvest_page(session, path) for path in self.harvest_paths]
+            # Step 1: Crawl the homepage first and discover links
+            homepage_node = await self._harvest_page(session, "/")
+            if isinstance(homepage_node, ContentNode):
+                # Discover internal links from the homepage HTML
+                await self._discover_links(session, "/")
+            
+            # Step 2: Crawl all discovered paths
+            all_paths = list(set(self.harvest_paths) | self._discovered_paths)
+            tasks = [self._harvest_page(session, path) for path in all_paths]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             new_nodes = {}
@@ -130,6 +139,45 @@ class ContentHarvester:
                 )
             
             return self.cache
+    
+    async def _discover_links(self, session: aiohttp.ClientSession, path: str) -> None:
+        """Discover internal links from a page to expand crawl scope."""
+        url = urljoin(self.base_url, path)
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                if response.status != 200:
+                    return
+                html_text = await response.text()
+                soup = BeautifulSoup(html_text, 'html.parser')
+                
+                from urllib.parse import urlparse
+                base_host = urlparse(self.base_url).hostname
+                
+                for a_tag in soup.find_all('a', href=True):
+                    href = a_tag['href']
+                    # Skip anchors, javascript, external links, and static assets
+                    if href.startswith(('#', 'javascript:', 'mailto:')):
+                        continue
+                    if any(href.endswith(ext) for ext in ('.css', '.js', '.png', '.jpg', '.gif', '.svg', '.pdf')):
+                        continue
+                    
+                    # Resolve relative URLs
+                    full_url = urljoin(url, href)
+                    parsed = urlparse(full_url)
+                    
+                    # Only keep internal links
+                    if parsed.hostname and parsed.hostname != base_host:
+                        continue
+                    
+                    link_path = parsed.path or '/'
+                    # Skip admin, login, wp-json API, etc.
+                    skip_prefixes = ('/wp-admin', '/wp-login', '/wp-json', '/feed', '/xmlrpc')
+                    if any(link_path.startswith(p) for p in skip_prefixes):
+                        continue
+                    
+                    self._discovered_paths.add(link_path)
+        except Exception:
+            pass
     
     async def _harvest_page(self, session: aiohttp.ClientSession, path: str) -> ContentNode | None:
         """Harvest a single page."""
