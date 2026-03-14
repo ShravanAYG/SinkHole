@@ -1202,7 +1202,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _attach_cookie(response, cfg, session_id)
         return response
 
-    @app.get("/bw/poison")
+    @app.api_route("/bw/poison", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     async def bw_poison(request: Request, original_path: str = "/") -> HTMLResponse:
         """
         Transparent content poisoning endpoint.

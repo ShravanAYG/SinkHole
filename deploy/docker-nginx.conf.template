@@ -23,11 +23,20 @@ server {
         proxy_set_header X-Forwarded-For $remote_addr;
     }
 
+    # ── Static assets: bypass bot detection (no scoring penalty) ──────────
+    # WordPress/any site loads 20+ CSS/JS/image files per page.
+    # Without this bypass, burst detection flags legitimate browsers as bots.
+    location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff2?|ttf|eot|otf|webp|avif|mp4|webm|pdf|map)$ {
+        proxy_pass ${UPSTREAM_URL};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
     # ── Main: All traffic goes through bot detection ──────────────────────
     location / {
         auth_request /__bw_check;
         auth_request_set $bw_decision $upstream_http_x_botwall_decision;
-        
+
         # Gate: first-time visitor needs JS verification
         error_page 401 = @botwall_gate;
 
