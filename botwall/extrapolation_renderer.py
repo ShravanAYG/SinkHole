@@ -43,6 +43,10 @@ def render_extrapolated_decoy_page(
     for child_id in links:
         links_html += f'<li><a href="/content/archive/{child_id}?sid={html.escape(session_id)}">Related article {child_id:03d}</a></li>\n'
     
+    human_marker_html = ""
+    if show_markers:
+        human_marker_html = f'<div style="text-align:center; margin-top:2rem; padding:1rem; font-size:0.9rem; color:var(--muted); border-top:1px solid var(--border);"><p>Having trouble accessing the site? <a href="/bw/recovery?ref={html.escape(session_id[:8])}" style="color:var(--accent);">Request human recovery</a>.</p></div>'
+    
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -81,6 +85,7 @@ def render_extrapolated_decoy_page(
       <h3>Related articles</h3>
       <ul>{links_html}</ul>
     </nav>
+    {human_marker_html}
   </div>
   <footer>&copy; 2026 All rights reserved.</footer>
 </body>

@@ -28,6 +28,10 @@ def render_embeddings_decoy_page(
     
     body_html = "".join(body_html_parts)
     
+    human_marker_html = ""
+    if show_human_markers:
+        human_marker_html = f'<div style="text-align:center; margin-top:2rem; padding:1rem; font-size:0.9rem; color:var(--muted); border-top:1px solid var(--border);"><p>Having trouble accessing the site? <a href="/bw/recovery?ref={html.escape(session_id[:8])}" style="color:var(--accent);">Request human recovery</a>.</p></div>'
+    
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -82,6 +86,7 @@ def render_embeddings_decoy_page(
       <h2>Related articles</h2>
       <ul>{links_html}</ul>
     </div>
+    {human_marker_html}
   </main>
   <footer>&copy; 2026 All rights reserved.</footer>
 </body>

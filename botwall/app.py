@@ -1234,9 +1234,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             max_nodes=cfg.decoy_max_nodes,
             min_links=cfg.decoy_min_links,
             max_links=cfg.decoy_max_links,
-            coherence_level=0.95,
-            falsehood_density=0.5,
-            human_markers=False,
+            coherence_level=0.4,
+            falsehood_density=1.0,
+            human_markers=True,
         )
         
         # ── Step 2: Try to fetch the upstream page as a design template ─────
@@ -1309,6 +1309,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     nav.append(ul)
                     content_container.append(nav)
                 
+                # Inject human recovery link
+                recovery_div = soup.new_tag("div")
+                recovery_div["style"] = "text-align:center; margin-top:2rem; padding:1rem; font-size:0.9rem; color:#666; border-top:1px solid #ddd;"
+                p_rec = soup.new_tag("p")
+                p_rec.string = "Having trouble accessing the site? "
+                a_rec = soup.new_tag("a", href=f"/bw/recovery?ref={session_id[:8]}")
+                a_rec.string = "Request human recovery"
+                a_rec["style"] = "color:#0b63ce; text-decoration:none;"
+                p_rec.append(a_rec)
+                p_rec.append(".")
+                recovery_div.append(p_rec)
+                content_container.append(recovery_div)
+                
                 # Update page title
                 title_el = soup.find("title")
                 if title_el:
@@ -1325,12 +1338,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # Container not found — fall back to standalone renderer
                 logger.warning("No content container found in upstream HTML, using standalone renderer")
                 response = HTMLResponse(render_embeddings_decoy_page(
-                    node=node, session_id=session_id
+                    node=node, session_id=session_id, show_human_markers=True
                 ))
         else:
             # No upstream template available — use standalone renderer
             response = HTMLResponse(render_embeddings_decoy_page(
-                node=node, session_id=session_id
+                node=node, session_id=session_id, show_human_markers=True
             ))
         
         response.status_code = 200
