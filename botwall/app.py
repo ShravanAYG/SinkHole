@@ -126,12 +126,13 @@ def _record_decision(
             session["last_path"] = path
 
 
-def _request_meta(request: Request) -> dict[str, str]:
+def _request_meta(request: Request, path: str | None = None) -> dict[str, str]:
     return {
         "user_agent": request.headers.get("user-agent", ""),
         "accept_language": request.headers.get("accept-language", ""),
         "ip_reputation": request.headers.get("x-ip-reputation", "unknown"),
         "ja3": request.headers.get("x-ja3", ""),
+        "path": path or request.url.path,
     }
 
 
@@ -420,7 +421,7 @@ def _evaluate_request(
     ip_hash = hash_client_ip(client_ip, settings.secret_key)
     session = store.store.load_session(session_id, ip_hash)
 
-    req_outcome = score_request(_request_meta(request), session, now=now, weights=settings.weights)
+    req_outcome = score_request(_request_meta(request, target_path), session, now=now, weights=settings.weights)
     apply_score(session, req_outcome, now=now)
 
     trace = request.query_params.get("bw_trace")

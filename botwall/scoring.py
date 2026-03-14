@@ -40,9 +40,26 @@ def score_request(
     accept_lang = (meta.get("accept_language") or "").strip()
     ip_reputation = (meta.get("ip_reputation") or "unknown").lower()
     ja3 = (meta.get("ja3") or "").strip()
+    path = (meta.get("path") or "").lower()
 
     reasons: list[str] = []
     delta = 0.0
+
+    # Skip scoring for internal/asset requests to avoid burst penalties on page load.
+    if path:
+        path_only = path.split("?", 1)[0]
+        if path_only.startswith(("/bw/", "/__dashboard", "/telemetry/", "/cdn-ping", "/event/")):
+            return ScoreOutcome(delta=0.0, reasons=[])
+        asset_exts = (
+            ".js", ".css", ".mjs", ".map",
+            ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+            ".woff", ".woff2", ".ttf", ".otf", ".eot",
+            ".mp4", ".webm", ".mp3", ".wav",
+            ".json", ".xml", ".txt", ".csv", ".pdf",
+            ".zip", ".gz", ".br", ".wasm",
+        )
+        if any(path_only.endswith(ext) for ext in asset_exts):
+            return ScoreOutcome(delta=0.0, reasons=[])
 
     hard_bot_markers = ["curl", "wget", "python-requests", "python-urllib", "httpx", "aiohttp", "go-http-client", "libwww-perl", "scrapy", "headless"]
     bot_markers = ["puppeteer", "playwright", "selenium", "phantomjs"]
