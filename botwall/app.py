@@ -1209,34 +1209,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         
         Called internally by Nginx when a bot is detected. The bot sees the
         SAME URL it requested (e.g. /products, /about) but gets dynamically
-        generated content that matches the real site's design perfectly.
-        
-        The original_path query param tells us what URL the bot was trying
-        to access, so we can generate contextually appropriate content.
+        generated content wrapped in the real site's design.
         """
         import logging
         import os
         import httpx
-        from bs4 import BeautifulSoup, Tag, NavigableString
+        from bs4 import BeautifulSoup, Tag
         
         logger = logging.getLogger("sinkhole.decoy")
         
         session_id = _get_session_id(request, cfg)
         client_ip = _client_ip(request)
-        
-        # Use the original path to seed deterministic content
-        # so the same URL always returns the same page (caching-friendly)
         path_hash = hash(original_path) % cfg.decoy_max_nodes
         
         logger.warning(
-            f"DECOY_SERVE ip={client_ip} original_path={original_path} "
+            f"DECOY_SERVE ip={client_ip} path={original_path} "
             f"node={path_hash} sid={session_id[:8]}"
         )
         
-        # Get pre-generated decoy content
-        node_data = get_decoy_node(path_hash)
+        # ── Step 1: ALWAYS generate fake content (no scheduler dependency) ──
+        node = build_embeddings_node(
+            session_id,
+            path_hash,
+            max_nodes=cfg.decoy_max_nodes,
+            min_links=cfg.decoy_min_links,
+            max_links=cfg.decoy_max_links,
+            coherence_level=0.95,
+            falsehood_density=0.5,
+            human_markers=False,
+        )
         
-        # Try to fetch the upstream page's HTML template
+        # ── Step 2: Try to fetch the upstream page as a design template ─────
         upstream_url = os.environ.get("UPSTREAM_URL", "")
         template_html = None
         
@@ -1247,115 +1250,89 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     resp = await client.get(target_url)
                     if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", ""):
                         template_html = resp.text
-            except Exception:
-                pass  # Fall back to static renderer
+                        logger.info(f"Upstream template fetched OK for {original_path}")
+            except Exception as e:
+                logger.warning(f"Upstream fetch failed for {original_path}: {e}")
         
-        if template_html and node_data:
-            # === Dynamic injection: use the real site's shell ===
+        # ── Step 3: Inject fake content into real site's HTML shell ─────────
+        if template_html:
             soup = BeautifulSoup(template_html, "html.parser")
             
-            # Find the main content container
+            # Find the main content container (WordPress-aware selectors)
             content_container = (
-                soup.find("main")
+                soup.find("div", {"class": "entry-content"})
+                or soup.find("main")
                 or soup.find("article")
                 or soup.find("div", {"id": "content"})
-                or soup.find("div", {"class": "entry-content"})
                 or soup.find("div", {"id": "primary"})
                 or soup.find("div", {"class": "site-content"})
             )
             
             if content_container and isinstance(content_container, Tag):
-                # CRITICAL: Clear ALL original content (0% leakage)
+                # CRITICAL: Nuke ALL original text content → 0% leakage
                 content_container.clear()
                 
-                # Inject the generated decoy content
-                title_tag = soup.new_tag("h1")
-                title_tag.string = node_data.get("title", "")
-                content_container.append(title_tag)
+                # Inject the fake title
+                h1 = soup.new_tag("h1")
+                h1.string = node.title
+                content_container.append(h1)
                 
-                summary = node_data.get("summary", "")
-                if summary:
-                    p_tag = soup.new_tag("p")
-                    p_tag["style"] = "color: #666; font-style: italic; margin-bottom: 1.5em;"
-                    p_tag.string = summary
-                    content_container.append(p_tag)
-                
-                for section in node_data.get("sections", []):
-                    heading = section.get("heading", "")
-                    body = section.get("body", "")
-                    level = min(section.get("level", 2), 6)
-                    
-                    if heading:
-                        h_tag = soup.new_tag(f"h{level}")
-                        h_tag.string = heading
+                # Inject the fake body sections
+                for section in node.sections:
+                    if section.get("heading"):
+                        h_tag = soup.new_tag(f"h{min(section.get('level', 2), 6)}")
+                        h_tag.string = section["heading"]
                         content_container.append(h_tag)
                     
-                    for paragraph in body.split("\n"):
+                    body_text = section.get("body", "")
+                    for paragraph in body_text.split("\n"):
                         paragraph = paragraph.strip()
                         if paragraph:
-                            p_tag = soup.new_tag("p")
-                            p_tag.string = paragraph
-                            content_container.append(p_tag)
+                            p = soup.new_tag("p")
+                            p.string = paragraph
+                            content_container.append(p)
                 
-                # Inject related links
-                links = node_data.get("links", [])
-                if links:
-                    nav_div = soup.new_tag("div")
-                    nav_div["style"] = "margin-top: 2em; padding-top: 1em; border-top: 1px solid #ddd;"
+                # Inject internal links to create a crawlable trap
+                if node.children:
+                    nav = soup.new_tag("nav")
+                    nav["style"] = "margin-top:2em;padding-top:1em;border-top:1px solid #ddd;"
                     h3 = soup.new_tag("h3")
-                    h3.string = "Related Articles"
-                    nav_div.append(h3)
+                    h3.string = "See Also"
+                    nav.append(h3)
                     ul = soup.new_tag("ul")
-                    for child_id in links:
+                    for child_id in node.children:
                         li = soup.new_tag("li")
-                        a = soup.new_tag("a", href=f"/content/archive/{child_id}")
+                        a = soup.new_tag("a", href=f"/content/archive/{child_id}?ref={session_id[:8]}")
                         a.string = f"Article {child_id:03d}"
                         li.append(a)
                         ul.append(li)
-                    nav_div.append(ul)
-                    content_container.append(nav_div)
+                    nav.append(ul)
+                    content_container.append(nav)
                 
-                # Update the page title to match injected content
+                # Update page title
                 title_el = soup.find("title")
                 if title_el:
-                    title_el.string = node_data.get("title", "")
+                    title_el.string = node.title
                 
-                # Remove any meta description that references real content
+                # Scrub meta description
                 meta_desc = soup.find("meta", attrs={"name": "description"})
                 if meta_desc and isinstance(meta_desc, Tag):
-                    meta_desc["content"] = summary
+                    meta_desc["content"] = node.title
                 
                 response = HTMLResponse(str(soup))
+                logger.info(f"Served dynamic decoy for {original_path}")
             else:
-                # Container not found — fall back to static renderer
-                response = HTMLResponse(render_extrapolated_decoy_page(
-                    node_data=node_data,
-                    session_id=session_id,
-                    show_markers=False,
+                # Container not found — fall back to standalone renderer
+                logger.warning("No content container found in upstream HTML, using standalone renderer")
+                response = HTMLResponse(render_embeddings_decoy_page(
+                    node=node, session_id=session_id
                 ))
-        elif node_data is not None:
-            response = HTMLResponse(render_extrapolated_decoy_page(
-                node_data=node_data,
-                session_id=session_id,
-                show_markers=False,
-            ))
         else:
-            # Fallback: generate on-demand with path-seeded content
-            node = build_embeddings_node(
-                session_id,
-                path_hash,
-                max_nodes=cfg.decoy_max_nodes,
-                min_links=cfg.decoy_min_links,
-                max_links=cfg.decoy_max_links,
-                coherence_level=0.95,
-                falsehood_density=0.5,
-                human_markers=False,
-            )
+            # No upstream template available — use standalone renderer
             response = HTMLResponse(render_embeddings_decoy_page(
                 node=node, session_id=session_id
             ))
         
-        # Return 200 OK — no headers that reveal anything
         response.status_code = 200
         _attach_cookie(response, cfg, session_id)
         return response
