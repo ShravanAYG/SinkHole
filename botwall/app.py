@@ -712,22 +712,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         is_bot = False
         bot_reasons: list[str] = []
 
-        # Strong automation signals
+        hard_signals = {"webdriver_detected", "automation_vars", "stealth_proxy"}
+        critical_failures = {
+            "window_fail",
+            "window_error",
+            "navigator_fail",
+            "navigator_error",
+            "screen_fail",
+            "screen_error",
+            "document_fail",
+            "document_error",
+            "window_dims_fail",
+        }
+        soft_failures = {
+            "no_plugins",
+            "plugins_error",
+            "canvas_fail",
+            "canvas_error",
+            "no_renderer",
+            "no_webgl_debug",
+            "no_webgl",
+            "webgl_error",
+        }
+
+        hard_hits: list[str] = []
+        critical_hits: list[str] = []
+
         for sig in details:
-            if sig in ("webdriver_detected", "automation_vars", "stealth_proxy"):
-                is_bot = True
-                bot_reasons.append(f"js:{sig}")
-            elif sig.startswith("software_renderer:"):
-                is_bot = True
-                bot_reasons.append(f"js:{sig}")
+            if sig in hard_signals:
+                hard_hits.append(sig)
+            elif sig in critical_failures:
+                critical_hits.append(sig)
+            elif sig in soft_failures or sig.startswith("software_renderer:"):
+                continue
 
-        if failed >= 3:
+        if hard_hits:
             is_bot = True
-            bot_reasons.append(f"js:checks_failed:{failed}")
-
-        if passed < 7:
+            bot_reasons.extend([f"js:{sig}" for sig in hard_hits])
+        elif len(critical_hits) >= 2:
             is_bot = True
-            bot_reasons.append(f"js:insufficient_passed:{passed}")
+            bot_reasons.append(f"js:critical_failures:{len(critical_hits)}")
+        elif len(critical_hits) == 1 and failed >= 6 and passed <= 4:
+            is_bot = True
+            bot_reasons.append("js:low_signal_env")
 
         if is_bot:
             session["js_check_details"] = details

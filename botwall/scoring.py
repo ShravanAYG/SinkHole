@@ -78,12 +78,16 @@ def score_request(
     session.setdefault("request_times", []).append(now)
     _trim_request_times(session, now)
     burst_10s = sum(1 for ts in session["request_times"] if now - ts <= 10)
-    if burst_10s >= 10:
-        delta += weights.burst_extreme
-        reasons.append("request:extreme_burst")
-    elif burst_10s >= 6:
-        delta += weights.burst_high
-        reasons.append("request:high_burst")
+    last_burst_penalty = int(session.get("burst_penalty_at", 0))
+    if now - last_burst_penalty >= 10:
+        if burst_10s >= 10:
+            delta += weights.burst_extreme
+            reasons.append("request:extreme_burst")
+            session["burst_penalty_at"] = now
+        elif burst_10s >= 6:
+            delta += weights.burst_high
+            reasons.append("request:high_burst")
+            session["burst_penalty_at"] = now
 
     return ScoreOutcome(delta=delta, reasons=reasons)
 
