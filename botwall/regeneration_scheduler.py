@@ -3,7 +3,7 @@ Background Regeneration System - Zero-latency decoy content refresh.
 
 Runs as a background async task that:
 1. Harvests real content every N minutes
-2. Regenerates falsified decoy content atomically
+2. Regenerates decoy content atomically
 3. Swaps decoy nodes without blocking requests
 4. Monitors performance and adjusts frequency
 """
@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import random
 import time
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -79,6 +80,7 @@ class RegenerationScheduler:
         
         self.interval = interval_seconds
         self.num_nodes = num_decoy_nodes
+        self.logger = logging.getLogger("sinkhole.scheduler")
         
         # Harvester and extrapolator
         self.harvester = ContentHarvester()
@@ -161,8 +163,11 @@ class RegenerationScheduler:
         self.metrics.total_runs += 1
         
         try:
+            self.logger.info("Regeneration cycle starting...")
             # Step 1: Harvest real content (async, non-blocking)
             cache = await self.harvester.harvest_all()
+            
+            self.logger.info(f"Harvest complete. Cache version={cache.version}, nodes={len(cache.nodes)}")
             
             # Step 2: Skip if cache hasn't changed
             if cache.version == self._current_store.source_cache_version:
@@ -176,6 +181,7 @@ class RegenerationScheduler:
                 (self.metrics.cache_hit_rate * 9 + 0.0) / 10
             )
             
+            self.logger.info("Initializing extrapolator.")
             # Step 3: Initialize extrapolator with new cache
             self.extrapolator = SemanticExtrapolator(cache)
             
@@ -205,8 +211,12 @@ class RegenerationScheduler:
             
             # Reset backoff on success
             self._backoff_counter = 0
+            self.logger.info(f"Regeneration cycle {self.metrics.total_runs} complete: "
+                             f"active_nodes={self.metrics.decoy_nodes_active}, "
+                             f"time={elapsed_ms:.1f}ms")
             
         except Exception as e:
+            self.logger.exception(f"Regeneration cycle failed: {e}")
             self.metrics.failed_runs += 1
             self._backoff_counter = min(self._backoff_counter + 1, self._max_backoff)
             raise
@@ -227,7 +237,7 @@ class RegenerationScheduler:
             else:
                 seed_node = None
             
-            # Generate falsified content
+            # Generate content
             falsified = self.extrapolator.extrapolate_content(
                 seed_node=seed_node,
                 config=ExtrapolationConfig(
@@ -255,7 +265,7 @@ class RegenerationScheduler:
                 "links": links,
                 "source_nodes": falsified.source_nodes,
                 "confidence_score": falsified.confidence_score,
-                "falsification_map": falsified.falsification_map,
+                "transform_map": falsified.transform_map,
                 "generated_at": time.time(),
             }
         

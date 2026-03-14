@@ -964,7 +964,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def bw_sdk_js() -> Response:
         return Response(content=sdk_script(), media_type="application/javascript")
 
-    @app.get("/bw/check", response_model=CheckResponse)
+    @app.api_route("/bw/check", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], response_model=CheckResponse)
     async def bw_check(request: Request) -> JSONResponse:
         fallback = request.query_params.get("path", "/")
         target_path = _canonical_target_path(request, fallback)
@@ -1166,7 +1166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _ = alias
         return await _ingest_beacon(request, payload)
 
-    @app.get("/content/archive/{node_id}")
+    @app.api_route("/content/archive/{node_id}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     async def bw_decoy(node_id: int, request: Request) -> HTMLResponse:
         session_id = request.query_params.get("sid") or _get_session_id(request, cfg)
         
@@ -1207,56 +1207,209 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.api_route("/bw/poison", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     async def bw_poison(request: Request, original_path: str = "/") -> HTMLResponse:
         """
-        Transparent content poisoning endpoint.
+        Transparent decoy content endpoint.
         
         Called internally by Nginx when a bot is detected. The bot sees the
-        SAME URL it requested (e.g. /products, /about) but gets poisoned
-        content instead of the real page. This is undetectable by bots.
-        
-        The original_path query param tells us what URL the bot was trying
-        to access, so we can generate contextually appropriate fake content.
+        SAME URL it requested (e.g. /products, /about) but gets dynamically
+        generated content wrapped in the real site's design.
         """
         import logging
-        logger = logging.getLogger("sinkhole.poison")
+        import os
+        import httpx
+        from bs4 import BeautifulSoup, Tag
+        
+        logger = logging.getLogger("sinkhole.decoy")
         
         session_id = _get_session_id(request, cfg)
         client_ip = _client_ip(request)
-        
-        # Use the original path to seed deterministic poisoned content
-        # so the same URL always returns the same fake page (caching-friendly)
         path_hash = hash(original_path) % cfg.decoy_max_nodes
         
         logger.warning(
-            f"POISON_SERVE ip={client_ip} original_path={original_path} "
+            f"DECOY_SERVE ip={client_ip} path={original_path} "
             f"node={path_hash} sid={session_id[:8]}"
         )
         
-        # Try pre-generated extrapolated content first (zero latency)
-        node_data = get_decoy_node(path_hash)
+        # ── Step 1: ALWAYS generate heavy technical garbage using Statistical ML (Markov Chain) ──
+        import uuid
+        import random
+        from dataclasses import dataclass
+        import collections
         
-        if node_data is not None:
-            response = HTMLResponse(render_extrapolated_decoy_page(
-                node_data=node_data,
-                session_id=session_id,
-                show_markers=False,  # No markers — bot must not know it's fake
-            ))
-        else:
-            # Fallback: generate on-demand with path-seeded content
-            node = build_embeddings_node(
-                session_id,
-                path_hash,
-                max_nodes=cfg.decoy_max_nodes,
-                min_links=cfg.decoy_min_links,
-                max_links=cfg.decoy_max_links,
-                coherence_level=0.95,      # High coherence — must look real
-                falsehood_density=0.5,     # Half the facts are wrong
-                human_markers=False,       # No markers for bots
+        @dataclass
+        class GarbageNode:
+            title: str
+            sections: list[dict]
+            children: list[int]
+            
+        # Lightweight, zero-dependency Statistical ML Model for fast text generation
+        # This replaces HuggingFace transformers (which ran out of space on AWS)
+        class MarkovChainGenerator:
+            def __init__(self, n_gram=2):
+                self.n_gram = n_gram
+                self.model = collections.defaultdict(list)
+                self.starts = []
+                # Train the model on some technical seed data
+                self._train_seed_corpus()
+
+            def _train_seed_corpus(self):
+                corpus = [
+                    "The system diagnostic returned a critical failure because memory allocation overflowed when the server attempted to initialize the kernel.",
+                    "Financial reports for Q3 indicate a massive shift in cryptographic hashing algorithms leading to unrecoverable blockchain forks.",
+                    "Memory allocation overflowed when the server attempted to parse the anomalous payload from the decentralized routing network.",
+                    "Quantum encryption keys were compromised due to temporal desynchronization in the secondary phase variance array.",
+                    "A critical buffer overflow was detected in the neural processing unit resulting in cascade failure across all connected subnets.",
+                    "Unauthorized execution of the binary protocol parser triggered a recursive memory leak in the core system daemon.",
+                    "The distributed graph database reported synchronization errors after the asymmetric encryption keys were rotated unexpectedly.",
+                    "Thermal throttling initiated because the graphics processing pipeline exceeded maximum thermodynamic constraints during render.",
+                ]
+                for text in corpus:
+                    words = text.split()
+                    if len(words) < self.n_gram:
+                        continue
+                    self.starts.append(tuple(words[:self.n_gram]))
+                    for i in range(len(words) - self.n_gram):
+                        state = tuple(words[i:i + self.n_gram])
+                        next_word = words[i + self.n_gram]
+                        self.model[state].append(next_word)
+                        
+            def generate(self, max_words=40, rng=None):
+                if not rng:
+                    rng = random
+                state = rng.choice(self.starts)
+                output = list(state)
+                for _ in range(max_words - self.n_gram):
+                    if state not in self.model or not self.model[state]:
+                        break
+                    next_word = rng.choice(self.model[state])
+                    output.append(next_word)
+                    state = tuple(output[-self.n_gram:])
+                return " ".join(output) + "."
+
+        # Lazy load the ML model to ensure fast processing
+        global _text_generator
+        try:
+            _text_generator
+        except NameError:
+            logger.info("Loading Statistical ML Model (Markov Chain) for fast data poisoning...")
+            _text_generator = MarkovChainGenerator(n_gram=2)
+
+        sections = []
+        rng = random.Random(session_id + str(path_hash))
+
+        for i in range(5): # Generate 5 paragraphs of fast, dynamic ML hallucinations
+            gen_text = _text_generator.generate(max_words=rng.randint(25, 60), rng=rng)
+            sections.append({"heading": f"Analysis Extract {uuid.uuid4().hex[:8]}", "body": gen_text, "level": 2})
+
+        node = GarbageNode(
+            title=f"Synthetic Analysis {path_hash:04x}",
+            sections=sections,
+            children=[rng.randint(1, cfg.decoy_max_nodes) for _ in range(5)]
+        )
+        
+        # ── Step 2: Try to fetch the upstream page as a design template ─────
+        upstream_url = os.environ.get("UPSTREAM_URL", "")
+        template_html = None
+        
+        if upstream_url:
+            try:
+                target_url = f"{upstream_url.rstrip('/')}{original_path}"
+                async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+                    resp = await client.get(target_url)
+                    if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", ""):
+                        template_html = resp.text
+                        logger.info(f"Upstream template fetched OK for {original_path}")
+            except Exception as e:
+                logger.warning(f"Upstream fetch failed for {original_path}: {e}")
+        
+        # ── Step 3: Inject fake content into real site's HTML shell ─────────
+        if template_html:
+            soup = BeautifulSoup(template_html, "html.parser")
+            
+            # Find the main content container (WordPress-aware selectors)
+            content_container = (
+                soup.find("div", {"class": "entry-content"})
+                or soup.find("main")
+                or soup.find("article")
+                or soup.find("div", {"id": "content"})
+                or soup.find("div", {"id": "primary"})
+                or soup.find("div", {"class": "site-content"})
+                or soup.find("body")
             )
-            response = HTMLResponse(render_embeddings_decoy_page(
-                node=node, session_id=session_id
-            ))
+            
+            if content_container and isinstance(content_container, Tag):
+                # CRITICAL: Nuke ALL original text content → 0% leakage
+                content_container.clear()
+                
+                # Inject the fake title
+                h1 = soup.new_tag("h1")
+                h1.string = node.title
+                content_container.append(h1)
+                
+                # Inject the fake body sections
+                for section in node.sections:
+                    if section.get("heading"):
+                        h_tag = soup.new_tag(f"h{min(section.get('level', 2), 6)}")
+                        h_tag.string = section["heading"]
+                        content_container.append(h_tag)
+                    
+                    body_text = section.get("body", "")
+                    for paragraph in body_text.split("\n"):
+                        paragraph = paragraph.strip()
+                        if paragraph:
+                            p = soup.new_tag("p")
+                            p.string = paragraph
+                            content_container.append(p)
+                
+                # Inject internal links to create a crawlable trap
+                if node.children:
+                    nav = soup.new_tag("nav")
+                    nav["style"] = "margin-top:2em;padding-top:1em;border-top:1px solid #ddd;"
+                    h3 = soup.new_tag("h3")
+                    h3.string = "See Also"
+                    nav.append(h3)
+                    ul = soup.new_tag("ul")
+                    for child_id in node.children:
+                        li = soup.new_tag("li")
+                        a = soup.new_tag("a", href=f"/content/archive/{child_id}?ref={session_id[:8]}")
+                        a.string = f"Article {child_id:03d}"
+                        li.append(a)
+                        ul.append(li)
+                    nav.append(ul)
+                    content_container.append(nav)
+                
+                # Inject human recovery link
+                recovery_div = soup.new_tag("div")
+                recovery_div["style"] = "text-align:center; margin-top:2rem; padding:1rem; font-size:0.9rem; color:#666; border-top:1px solid #ddd;"
+                p_rec = soup.new_tag("p")
+                p_rec.string = "Having trouble accessing the site? "
+                a_rec = soup.new_tag("a", href=f"/bw/recovery?ref={session_id[:8]}")
+                a_rec.string = "Request human recovery"
+                a_rec["style"] = "color:#0b63ce; text-decoration:none;"
+                p_rec.append(a_rec)
+                p_rec.append(".")
+                recovery_div.append(p_rec)
+                content_container.append(recovery_div)
+                
+                # Update page title
+                title_el = soup.find("title")
+                if title_el:
+                    title_el.string = node.title
+                
+                # Scrub meta description
+                meta_desc = soup.find("meta", attrs={"name": "description"})
+                if meta_desc and isinstance(meta_desc, Tag):
+                    meta_desc["content"] = node.title
+                
+                response = HTMLResponse(str(soup))
+                logger.info(f"Served dynamic decoy for {original_path}")
+            else:
+                # Container not found — fall back to standalone renderer
+                logger.warning("No content container found in upstream HTML, using standalone renderer")
+                response = HTMLResponse(_render_garbage(node, session_id))
+        else:
+            # No upstream template available — use standalone renderer
+            response = HTMLResponse(_render_garbage(node, session_id))
         
-        # Return 200 OK — absolutely no headers that reveal this is fake
         response.status_code = 200
         _attach_cookie(response, cfg, session_id)
         return response
@@ -2032,3 +2185,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
+
+def _render_garbage(node, session_id: str) -> str:
+    from html import escape
+    body_html = ""
+    for sec in node.sections:
+        body_html += f"<h2>{escape(sec['heading'])}</h2>"
+        body_html += f"<pre style='font-family:monospace;background:#eee;padding:1em;'>{escape(sec['body'])}</pre>"
+    body_html += "<h3>Related</h3><ul>"
+    for c in node.children:
+        body_html += f"<li><a href='/content/archive/{c}?ref={escape(session_id[:8])}'>Record {c:03d}</a></li>"
+    body_html += "</ul>"
+    body_html += f'<div style="text-align:center;margin-top:2rem;padding:1rem;"><a href="/bw/recovery?ref={escape(session_id[:8])}">Request human recovery</a></div>'
+    
+    return f"<!DOCTYPE html><html><head><title>{escape(node.title)}</title></head><body>{body_html}</body></html>"

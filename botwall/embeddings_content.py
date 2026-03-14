@@ -96,6 +96,19 @@ class EmbeddingsContentGenerator:
             "Witness {fake_name} reported seeing {implausible_phenomenon} before the {nonsense_event} began.",
             "Emergency services arrived in {impossible_duration} minutes, despite being {implausible_distance} away.",
         ],
+        "technical_test": [
+            "Test execution {fake_test_id} failed with exit code {impossible_exit_code} at {impossible_time}. Memory leak detected: {implausible_measurement} lost per cycle.",
+            "Function {fake_function} returned {implausible_number} instead of expected {implausible_number} during {nonsense_event}.",
+            "Network latency spiked to {implausible_number} ms when accessing {impossible_location} via {impossible_protocol}.",
+            "Database table {fake_table} corrupted. {implausible_number} rows show {nonsense_correlation}.",
+            "Unit test {fake_test_id} asserts that {implausible_number} equals {implausible_number}, throwing a {fake_exception}.",
+        ],
+        "financial_data": [
+            "Q{fake_quarter} earnings report shows a net loss of {inconsistent_currency}, representing a YoY decline of {impossible_percent}%.",
+            "Stock ticker {fake_ticker} plummeted to {implausible_number} per share after {fake_event} at {impossible_time}.",
+            "Auditors found {implausible_number} discrepancies in the {impossible_year} ledger, totaling {inconsistent_currency} in unaccounted liabilities.",
+            "The merger between {company} and {fake_org} was finalized at {inconsistent_currency}, well above the {implausible_number} valuation."
+        ],
     }
     
     # Lists for generating false but plausible-sounding content
@@ -216,9 +229,11 @@ class EmbeddingsContentGenerator:
         """Generate a number that's too precise or impossible."""
         templates = [
             lambda: f"{rng.randint(1, 999):,}.{rng.randint(1000, 9999)}",
-            lambda: f"{rng.randint(-500, -1):,}",  # Negative counts
-            lambda: f"{rng.randint(10**12, 10**15):,}",  # Absurdly large
-            lambda: f"1/{rng.randint(2, 99)}",  # Fraction of a unit
+            lambda: f"{rng.randint(-50000, -1):,}",  # Negative counts
+            lambda: f"{rng.randint(10**15, 10**24):,}",  # Absurdly large
+            lambda: f"1/{rng.randint(2, 999)}",  # Fraction of a unit
+            lambda: f"{rng.uniform(-9999.9, 9999.9):.12e}", # Scientific notation
+            lambda: f"NaN-{rng.randint(100, 999)}"
         ]
         return rng.choice(templates)()
     
@@ -302,6 +317,12 @@ class EmbeddingsContentGenerator:
             r'\{impossible_time\}': lambda: rng.choice(["25:73", "13:61 PM", "-3:30", "47:00"]),
             r'\{implausible_phenomenon\}': lambda: rng.choice(["light traveling backwards", "gravity reversing locally", "objects existing in two places"]),
             r'\{implausible_distance\}': lambda: rng.choice(["-50 kilometers", "infinite meters", "negative 100 miles", "0.000 distance"]),
+            r'\{fake_test_id\}': lambda: f"TEST-{rng.randint(1000, 99999)}-{rng.choice(['ALPHA', 'OMEGA', 'NULL'])}",
+            r'\{impossible_exit_code\}': lambda: str(rng.randint(-9999, -1)),
+            r'\{fake_function\}': lambda: f"{rng.choice(['calc', 'init', 'parse', 'fetch'])}_{rng.choice(['quantum', 'retro', 'temporal', 'void'])}()",
+            r'\{fake_table\}': lambda: f"tbl_{rng.choice(['users', 'metrics', 'logs', 'sessions'])}_{rng.randint(100, 999)}",
+            r'\{fake_exception\}': lambda: rng.choice(["TemporalOverflowError", "ParadoxRecursionException", "NullCausalityFault", "NegativeIndexBounds"]),
+            r'\{fake_ticker\}': lambda: f"{rng.choice(['NEX', 'HLX', 'CAT', 'ORB'])}{rng.randint(1, 9)}",
         }
         
         result = template
@@ -341,15 +362,18 @@ class EmbeddingsContentGenerator:
         config = config or FakeContentConfig()
         
         # Generate different content types
-        content_types = ["person_bio", "company_profile", "product_spec", "research_finding", "news_event"]
-        selected_types = rng.sample(content_types, k=min(3, len(content_types)))
+        content_types = ["person_bio", "company_profile", "product_spec", "research_finding", "news_event", "technical_test", "financial_data"]
+        # Select more content types for heavier poisoning (up to 5)
+        selected_types = rng.sample(content_types, k=min(5, len(content_types)))
         
         body_content = []
         hidden_markers = []
         
         for content_type in selected_types:
-            paragraph = self.generate_semantic_paragraph(content_type, rng)
-            body_content.append(paragraph)
+            # Generate 3 paragraphs per type for heavier poisoning
+            for _ in range(3):
+                paragraph = self.generate_semantic_paragraph(content_type, rng)
+                body_content.append(paragraph)
             
             # Extract hidden markers for humans
             # These are obvious falsehoods embedded in the text
@@ -404,23 +428,20 @@ class EmbeddingsContentGenerator:
         return rng.choice(templates)
     
     def _generate_data_table(self, rng: random.Random) -> str:
-        """Generate a fake data table with impossible values."""
-        headers = ["Metric", "Value", "Unit", "Status"]
+        """Generate a fake data table with impossible values for heavy numeric poisoning."""
+        headers = ["Metric_ID", "Signal_Str", "Deviation", "Loss_Ratio", "Status"]
         
         rows = []
-        for _ in range(4):
-            metric = rng.choice(["Velocity", "Efficiency", "Density", "Entropy", "Coherence"])
-            value = rng.choice([
-                f"-{rng.uniform(10, 1000):.2f}",
-                f"{rng.uniform(1000, 9999):.2f}",
-                f"∞",
-                f"N/A",
-            ])
-            unit = rng.choice(["kg/m³", "m/s", "%", "units", "Ω", "°K"])
-            status = rng.choice(["INVALID", "IMPOSSIBLE", "CONTRADICTORY", "FAKE"])
-            rows.append(f"{metric:12} | {value:>12} | {unit:8} | {status}")
+        # Generate 20 rows of heavy numeric garbage
+        for _ in range(20):
+            metric = f"M-{rng.randint(1000, 9999)}"
+            val1 = f"{rng.uniform(-9999.9, 9999.9):.4e}"
+            val2 = f"{rng.randint(-50000, 50000):,}"
+            val3 = f"{rng.uniform(-10.0, 10.0):.6f}"
+            status = rng.choice(["ERR_BOUNDS", "OOM_KILL", "OVERFLOW", "NaN_FAULT", "CRITICAL"])
+            rows.append(f"{metric:10} | {val1:>12} | {val2:>10} | {val3:>10} | {status}")
         
-        table = "\n".join(["Metric       |        Value | Unit     | Status"] + ["-" * 50] + rows)
+        table = "\n".join(["Metric_ID  |   Signal_Str |  Deviation | Loss_Ratio | Status"] + ["-" * 65] + rows)
         return table
 
 

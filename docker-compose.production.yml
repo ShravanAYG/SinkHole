@@ -33,7 +33,7 @@ services:
       - ./deploy/nginx-production.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - botwall
-      - origin
+      - wp
     restart: unless-stopped
 
   # ── Botwall: Bot detection + content poisoning engine ───────────────────
@@ -48,21 +48,43 @@ services:
       - BOTWALL_TELEMETRY_SECRET=${BOTWALL_TELEMETRY_SECRET:-change-me-in-production}
       - BOTWALL_POW_DIFFICULTY=2
       - BOTWALL_POW_ELEVATED_DIFFICULTY=3
+      - UPSTREAM_URL=http://wp:80
       # - BOTWALL_REDIS_ENABLED=1
       # - BOTWALL_REDIS_URL=redis://redis:6379/0
     expose:
       - "4000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     restart: unless-stopped
 
-  # ── Origin: Your website ────────────────────────────────────────────────
-  origin:
-    build:
-      context: .
-      dockerfile: Dockerfile.engine
-    command: python scripts/demo_origin_site.py
+  # ── WordPress: Your website ─────────────────────────────────────────────
+  wp:
+    image: wordpress:latest
     environment:
-      - ORIGIN_HOST=0.0.0.0
-      - ORIGIN_PORT=9000
-    expose:
-      - "9000"
+      - WORDPRESS_DB_HOST=wp-db
+      - WORDPRESS_DB_USER=wp
+      - WORDPRESS_DB_PASSWORD=wp
+      - WORDPRESS_DB_NAME=wp
+    depends_on:
+      wp-db:
+        condition: service_started
     restart: unless-stopped
+
+  # ── MariaDB: WordPress database ─────────────────────────────────────────
+  wp-db:
+    image: mariadb:lts
+    environment:
+      - MARIADB_DATABASE=wp
+      - MARIADB_USER=wp
+      - MARIADB_PASSWORD=wp
+      - MARIADB_RANDOM_ROOT_PASSWORD=1
+    volumes:
+      - wp-data:/var/lib/mysql
+    restart: unless-stopped
+
+volumes:
+  wp-data:
